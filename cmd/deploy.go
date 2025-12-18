@@ -22,13 +22,12 @@ func init() {
 		RunE:  runDeploy,
 	}
 
-	cmd.Flags().StringVarP(&configPath, "config", "f", "", "部署配置文件路径（YAML）")
-	cmd.Flags().StringVar(&logDirFlag, "log-dir", "", "覆盖配置文件中的日志目录（可选）")
+	cmd.Flags().StringVarP(&configPath, "config", "f", "./config.deploy.yaml", "部署配置文件路径（YAML）")
 
-	err := cmd.MarkFlagRequired("config")
-	if err != nil {
-		panic(fmt.Sprintf("mark 'config' flag required error: %v", err))
-	}
+	// err := cmd.MarkFlagRequired("config")
+	// if err != nil {
+	// 	panic(fmt.Sprintf("mark 'config' flag required error: %v", err))
+	// }
 
 	rootCmd.AddCommand(cmd)
 }
@@ -38,10 +37,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	cfg := deploy.LoadConfigFromFile(configPath)
-
-	if logDirFlag != "" {
-		cfg.LogDir = logDirFlag
-	}
 
 	if err := deploy.Run(ctx, *cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "deploy 失败：", err)

@@ -8,58 +8,49 @@ import (
 )
 
 // ServiceConfig 描述单个 service 的配置
-// 每个 service 都有独立的 count / remoteCmd
+// AMI / 实例类型 / KeyName / 标签等都在 service 级别配置，保持模型简单。
 type ServiceConfig struct {
-	Type      enums.ServiceType
-	Count     int
-	RemoteCmd string
+	Type enums.ServiceType `yaml:"type"`
+
+	AMI          string `yaml:"ami"`
+	InstanceType string `yaml:"instanceType"`
+
+	TagPrefix string `yaml:"tagPrefix"`
+
+	Count     uint   `yaml:"count"`
+	RemoteCmd string `yaml:"remoteCmd"`
 }
 
-type BaseConfig struct {
-	// AWS / EC2 相关
-	Region          string
-	AMI             string
-	InstanceType    string
-	KeyName         string
-	SecurityGroupID string
-	TagPrefix       string
+type CommonConfig struct {
+	// AWS / EC2 相关（全局）
+	Region          string `yaml:"region"`
+	SecurityGroupID string `yaml:"securityGroupId"`
 
-	// 运行与 SSH
-	RunDuration time.Duration
-	SSHUser     string
-	SSHKeyDir   string // 为空时默认使用 $HOME/.ssh
-	LogDir      string
+	// 运行与 SSH（全局）
+	RunDuration time.Duration `yaml:"runDuration"`
+	SSHUser     string        `yaml:"sshUser"`
+	SSHKeyDir   string        `yaml:"sshKeyDir"` // 为空时默认使用 $HOME/.ssh
+	KeyName     string        `yaml:"keyName"`
+	LogDir      string        `yaml:"logDir"`
+
+	// 链通用配置
+	L1ChainId                  string `yaml:"l1ChainId"`
+	L1RpcUrl                   string `yaml:"l1RpcUrl"`
+	L1VaultMnemonic            string `yaml:"l1VaultMnemonic"`
+	L1BridgeRelayContract      string `yaml:"l1BridgeRelayContract"`
+	L1RegisterBridgePrivateKey string `yaml:"l1RegisterBridgePrivateKey"`
+	DryRun                     bool   `yaml:"dryRun"`
+	ForceDeployL2Chain         bool   `yaml:"forceDeployL2Chain"`
 }
 
 // DeployConfig 描述一次 deploy 命令所需的全部参数
 type DeployConfig struct {
+	CommonConfig `yaml:",inline" mapstructure:",squash"`
 	// 多个 service，每个 service 的数量和命令独立配置
-	Services []ServiceConfig
-	BaseConfig
+	Services []ServiceConfig `yaml:"services"`
 }
 
-// // fileConfig / fileServiceConfig 仅用于反序列化 YAML 配置文件，保持对外 Config 结构简洁
-// type fileServiceConfig struct {
-// 	Type      string `yaml:"type"`
-// 	Count     int    `yaml:"count"`
-// 	RemoteCmd string `yaml:"remote_cmd"`
-// }
-
-// type fileConfig struct {
-// 	Region          string              `yaml:"region"`
-// 	AMI             string              `yaml:"ami"`
-// 	InstanceType    string              `yaml:"instance_type"`
-// 	KeyName         string              `yaml:"key_name"`
-// 	SecurityGroupID string              `yaml:"security_group_id"`
-// 	TagPrefix       string              `yaml:"tag_prefix"`
-// 	RunMinutes      int                 `yaml:"run_minutes"`
-// 	SSHUser         string              `yaml:"ssh_user"`
-// 	SSHKeyDir       string              `yaml:"ssh_key_dir"`
-// 	LogDir          string              `yaml:"log_dir"`
-// 	Services        []fileServiceConfig `yaml:"services"`
-// }
-
-// LoadConfigFromFile 从 YAML 文件加载配置并转换为内部 Config 结构
+// LoadConfigFromFile 从 YAML 文件加载配置并转换为内部 DeployConfig 结构
 func LoadConfigFromFile(path string) *DeployConfig {
 	return configutils.MustLoadByFile[DeployConfig](path)
 }

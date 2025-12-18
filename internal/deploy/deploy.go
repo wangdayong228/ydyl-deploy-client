@@ -9,31 +9,29 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/openweb3/go-sdk-common/privatekeyhelper"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/constants/enums"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/cryptoutil"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/sshutil"
 )
 
-// Run 按照 Config 中的参数，完成一次完整的批量部署流程：
+// Run 按照 DeployConfig 中的参数，完成一次完整的批量部署流程：
 // 对每个 ServiceConfig：
 // 1）批量创建对应数量的 EC2 实例；2）等待实例 running；3）获取公网 IP 并等待 SSH 就绪；
 // 4）为每个实例构造远程命令并执行；5）收集日志与执行结果。
 func Run(ctx context.Context, cfg DeployConfig) error {
-	// 基本配置校验：这里假定 cfg 多数情况来自 YAML 配置文件，也兼容调用方手动构造 Config 的场景。
-	if err := validateConfig(cfg); err != nil {
-		return err
-	}
 
-	if err := os.MkdirAll(cfg.LogDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.CommonConfig.LogDir, 0o755); err != nil {
 		return fmt.Errorf("创建日志目录失败: %w", err)
 	}
 
 	awsCfg := aws.Config{}
-	if cfg.Region != "" {
-		awsCfg.Region = aws.String(cfg.Region)
+	if cfg.CommonConfig.Region != "" {
+		awsCfg.Region = aws.String(cfg.CommonConfig.Region)
 	}
 
 	sess, err := session.NewSession(&awsCfg)
@@ -72,7 +70,7 @@ func Run(ctx context.Context, cfg DeployConfig) error {
 		}
 
 		log.Printf("👉 [%s] 批量执行远程命令...\n", svc.Type.String())
-		if err := runCommandsOnInstances(ctx, ec2Client, ips, cfg, svc); err != nil {
+		if err := runCommandsOnInstances(ctx, ec2Client, ips, cfg.CommonConfig, svc); err != nil {
 			return err
 		}
 	}
@@ -81,74 +79,18 @@ func Run(ctx context.Context, cfg DeployConfig) error {
 	return nil
 }
 
-// validateConfig 对运行前的关键字段做一层保护性校验。
-// 主要针对必填字段与明显非法值，避免在真正调用 AWS / SSH 时才失败。
-func validateConfig(cfg DeployConfig) error {
-	if len(cfg.Services) == 0 {
-		return fmt.Errorf("至少需要配置一个 service")
-	}
-
-	total := 0
-	for _, s := range cfg.Services {
-		if s.Count <= 0 {
-			return fmt.Errorf("service=%s 的 count 必须大于 0", s.Type.String())
-		}
-		total += s.Count
-	}
-	if total <= 0 {
-		return fmt.Errorf("所有 service 的总 count 必须大于 0")
-	}
-
-	if cfg.AMI == "" {
-		return fmt.Errorf("AMI 不可为空")
-	}
-	if cfg.InstanceType == "" {
-		return fmt.Errorf("instanceType 不可为空")
-	}
-	if cfg.KeyName == "" {
-		return fmt.Errorf("keyName 不可为空")
-	}
-	if cfg.SecurityGroupID == "" {
-		return fmt.Errorf("securityGroupId 不可为空")
-	}
-	if cfg.TagPrefix == "" {
-		return fmt.Errorf("tagPrefix 不可为空")
-	}
-	if cfg.RunDuration <= 0 {
-		return fmt.Errorf("runDuration 必须大于 0")
-	}
-	if cfg.SSHUser == "" {
-		return fmt.Errorf("sshUser 不可为空")
-	}
-	if cfg.LogDir == "" {
-		return fmt.Errorf("logDir 不可为空")
-	}
-
-	return nil
-}
-
 func runInstances(ctx context.Context, ec2Client *ec2.EC2, cfg DeployConfig, svc ServiceConfig) ([]*string, error) {
 	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(cfg.AMI),
-		InstanceType: aws.String(cfg.InstanceType),
+		ImageId:      aws.String(svc.AMI),
+		InstanceType: aws.String(svc.InstanceType),
 		MinCount:     aws.Int64(int64(svc.Count)),
 		MaxCount:     aws.Int64(int64(svc.Count)),
-		KeyName:      aws.String(cfg.KeyName),
+		KeyName:      aws.String(cfg.CommonConfig.KeyName),
 		SecurityGroupIds: []*string{
-			aws.String(cfg.SecurityGroupID),
+			aws.String(cfg.CommonConfig.SecurityGroupID),
 		},
 		InstanceInitiatedShutdownBehavior: aws.String("terminate"),
-		TagSpecifications: []*ec2.TagSpecification{
-			{
-				ResourceType: aws.String("instance"),
-				Tags: []*ec2.Tag{
-					{
-						Key:   aws.String("Name"),
-						Value: aws.String(cfg.TagPrefix),
-					},
-				},
-			},
-		},
+		TagSpecifications:                 []*ec2.TagSpecification{},
 	}
 
 	out, err := ec2Client.RunInstancesWithContext(ctx, input)
@@ -163,7 +105,7 @@ func runInstances(ctx context.Context, ec2Client *ec2.EC2, cfg DeployConfig, svc
 
 	// 逐台实例追加/覆盖 Name 标签为 TAG-<service>-1...TAG-<service>-N
 	for i, id := range ids {
-		name := fmt.Sprintf("%s-%s-%d", cfg.TagPrefix, svc.Type.String(), i+1)
+		name := fmt.Sprintf("%s-%s-%d", svc.TagPrefix, svc.Type.String(), i+1)
 		_, err := ec2Client.CreateTagsWithContext(ctx, &ec2.CreateTagsInput{
 			Resources: []*string{id},
 			Tags: []*ec2.Tag{
@@ -215,57 +157,17 @@ func getInstancePublicIPs(ctx context.Context, ec2Client *ec2.EC2, ids []*string
 }
 
 func waitAllSSHReady(ctx context.Context, ips []string, cfg DeployConfig) error {
+	sshKeyPath := buildSSHKeyPath(cfg.CommonConfig)
 	for _, ip := range ips {
 		log.Printf("[%s] 等待 SSH 就绪...\n", ip)
-		if err := waitSSH(ctx, ip, cfg); err != nil {
+		if err := sshutil.WaitSSH(ctx, ip, cfg.CommonConfig.SSHUser, sshKeyPath); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func waitSSH(ctx context.Context, ip string, cfg DeployConfig) error {
-	const (
-		maxRetry        = 60
-		retryInterval   = 3 * time.Second
-		singleTimeout   = 3 * time.Second
-		sshBinary       = "ssh"
-		hostKeyChecking = "accept-new"
-	)
-
-	keyPath := buildSSHKeyPath(cfg)
-
-	for i := 0; i < maxRetry; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		sshCtx, cancel := context.WithTimeout(ctx, singleTimeout)
-		cmd := exec.CommandContext(sshCtx, sshBinary,
-			"-o", "StrictHostKeyChecking="+hostKeyChecking,
-			"-o", "IdentitiesOnly=yes",
-			"-o", "BatchMode=yes",
-			"-o", "ConnectTimeout=3",
-			"-i", keyPath,
-			fmt.Sprintf("%s@%s", cfg.SSHUser, ip),
-			"true",
-		)
-
-		if err := cmd.Run(); err == nil {
-			cancel()
-			return nil
-		}
-
-		cancel()
-		time.Sleep(retryInterval)
-	}
-
-	return fmt.Errorf("[%s] SSH 一直未就绪", ip)
-}
-
-func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []string, cfg DeployConfig, svc ServiceConfig) error {
+func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []string, cfg CommonConfig, svc ServiceConfig) error {
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
@@ -280,7 +182,7 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 		go func(i int, ip string) {
 			defer wg.Done()
 
-			name := fmt.Sprintf("%s-%s-%d", cfg.TagPrefix, svc.Type.String(), i)
+			name := fmt.Sprintf("%s-%s-%d", svc.TagPrefix, svc.Type.String(), i)
 
 			// 再次确认标签（与 shell 版一致，用 ip -> instanceId -> 打 Name 标签）
 			instID, err := findInstanceByIP(ctx, ec2Client, ip)
@@ -293,7 +195,7 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 				return
 			}
 
-			cmdStr, err := buildRemoteCommandForIndex(i, svc)
+			cmdStr, err := buildRemoteCommandForIndex(i, svc, cfg)
 			if err != nil {
 				setFirstErr(&mu, &first, err)
 				return
@@ -311,7 +213,7 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 			defer logFile.Close()
 
 			sshCmd := exec.CommandContext(ctx, "ssh",
-				"-o", "StrictHostKeyChecking=accept-new",
+				"-o", "StrictHostKeyChecking=no",
 				"-o", "IdentitiesOnly=yes",
 				"-i", keyPath,
 				fmt.Sprintf("%s@%s", cfg.SSHUser, ip),
@@ -332,7 +234,7 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 	return first
 }
 
-func buildSSHKeyPath(cfg DeployConfig) string {
+func buildSSHKeyPath(cfg CommonConfig) string {
 	keyDir := cfg.SSHKeyDir
 	if keyDir == "" {
 		home, _ := os.UserHomeDir()
@@ -387,7 +289,7 @@ func tagInstanceName(ctx context.Context, ec2Client *ec2.EC2, instanceID, name s
 //     命令为：cd /home/ubuntu/op-work/scripts/deploy-op-stack && PRIVATE_KEY=<pk> L2_CHAIN_ID=<id> ./deploy-with-env.sh
 //
 // 后续可在此扩展 cdk / xjst 等模式。
-func buildRemoteCommandForIndex(i int, svc ServiceConfig) (string, error) {
+func buildRemoteCommandForIndex(i int, svc ServiceConfig, common CommonConfig) (string, error) {
 	if svc.RemoteCmd != "" {
 		return svc.RemoteCmd, nil
 	}
@@ -405,6 +307,20 @@ func buildRemoteCommandForIndex(i int, svc ServiceConfig) (string, error) {
 			"cd /home/ubuntu/op-work/scripts/deploy-op-stack && PRIVATE_KEY=%s L2_CHAIN_ID=%d ./deploy-with-env.sh",
 			pk, chainID,
 		), nil
+	case enums.ServiceTypeCDK:
+		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_RELAY_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh
+		l2ChainID := 10000 + i
+		l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(common.L1VaultMnemonic, i, nil)
+		if err != nil {
+			return "", fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
+		}
+
+		return fmt.Sprintf(
+			"cd /home/ubuntu/workspace/ydyl-deployment-suite && git pull && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t START_STEP=1 ./cdk_pipe.sh",
+			l2ChainID, common.L1ChainId, common.L1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeRelayContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain,
+		), nil
+	case enums.ServiceTypeXJST:
+		return "", fmt.Errorf("service=xjst 时必须显式配置 remoteCmd")
 	default:
 		return "", fmt.Errorf("未知的 service 类型: %s", svc.Type.String())
 	}
