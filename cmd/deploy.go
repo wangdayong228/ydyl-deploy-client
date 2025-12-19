@@ -11,7 +11,6 @@ import (
 
 var (
 	configPath string
-	logDirFlag string
 )
 
 func init() {

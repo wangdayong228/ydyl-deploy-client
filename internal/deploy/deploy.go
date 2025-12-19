@@ -93,6 +93,21 @@ func runInstances(ctx context.Context, ec2Client *ec2.EC2, cfg DeployConfig, svc
 		TagSpecifications:                 []*ec2.TagSpecification{},
 	}
 
+	// 如果在 CommonConfig 中配置了磁盘大小，则为所有实例设置统一的根盘大小
+	if cfg.CommonConfig.DiskSizeGiB > 0 {
+		input.BlockDeviceMappings = []*ec2.BlockDeviceMapping{
+			{
+				// 大多数 Ubuntu / Amazon Linux AMI 的根盘设备名为 /dev/xvda，如不符合可改为对应值
+				DeviceName: aws.String("/dev/sda1"),
+				Ebs: &ec2.EbsBlockDevice{
+					VolumeSize:          aws.Int64(cfg.CommonConfig.DiskSizeGiB),
+					VolumeType:          aws.String("gp3"),
+					DeleteOnTermination: aws.Bool(true),
+				},
+			},
+		}
+	}
+
 	out, err := ec2Client.RunInstancesWithContext(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("启动实例失败: %w", err)
@@ -316,7 +331,7 @@ func buildRemoteCommandForIndex(i int, svc ServiceConfig, common CommonConfig) (
 		}
 
 		return fmt.Sprintf(
-			"cd /home/ubuntu/workspace/ydyl-deployment-suite && git pull && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t START_STEP=1 ./cdk_pipe.sh",
+			"cd /home/ubuntu/workspace/ydyl-deployment-suite && git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t START_STEP=1 ./cdk_pipe.sh",
 			l2ChainID, common.L1ChainId, common.L1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeRelayContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain,
 		), nil
 	case enums.ServiceTypeXJST:

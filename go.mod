@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go v1.55.0
 	github.com/nft-rainbow/rainbow-goutils v0.0.0-20251030085952-357a8712fdb9
 	github.com/openweb3/go-sdk-common v0.0.0-20240627072707-f78f0155ab34
+	github.com/shopspring/decimal v1.4.0
 	github.com/spf13/cobra v1.8.0
 )
 

@@ -25,6 +25,8 @@ type CommonConfig struct {
 	// AWS / EC2 相关（全局）
 	Region          string `yaml:"region"`
 	SecurityGroupID string `yaml:"securityGroupId"`
+	// 所有实例的系统盘大小（GiB）
+	DiskSizeGiB int64 `yaml:"diskSizeGiB"`
 
 	// 运行与 SSH（全局）
 	RunDuration time.Duration `yaml:"runDuration"`
