@@ -35,6 +35,9 @@ type CommonConfig struct {
 	KeyName     string        `yaml:"keyName"`
 	LogDir      string        `yaml:"logDir"`
 
+	// 输出目录：用于保存服务器 IP 列表和脚本运行状态等 JSON 文件
+	OutputDir string `yaml:"outputDir"`
+
 	// 链通用配置
 	L1ChainId                  string `yaml:"l1ChainId"`
 	L1RpcUrl                   string `yaml:"l1RpcUrl"`

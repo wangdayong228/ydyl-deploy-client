@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -8,7 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -28,6 +32,23 @@ func Run(ctx context.Context, cfg DeployConfig) error {
 	if err := os.MkdirAll(cfg.CommonConfig.LogDir, 0o755); err != nil {
 		return fmt.Errorf("创建日志目录失败: %w", err)
 	}
+
+	// 设置并创建输出目录，用于保存 servers.json / script_status.json
+	if cfg.CommonConfig.OutputDir == "" {
+		cfg.CommonConfig.OutputDir = filepath.Join(cfg.CommonConfig.LogDir, "output")
+	}
+
+	// 如果本次运行前已经存在 output 目录，则先做一次简单的归档备份：
+	//   output/        -> output-YYYYMMDD-HHMMSS/
+	// 以免新的部署覆盖掉上一次的 servers.json / script_status.json。
+	if err := rotateExistingOutputDir(cfg.CommonConfig.OutputDir); err != nil {
+		return fmt.Errorf("归档旧的输出目录失败: %w", err)
+	}
+	if err := os.MkdirAll(cfg.CommonConfig.OutputDir, 0o755); err != nil {
+		return fmt.Errorf("创建输出目录失败: %w", err)
+	}
+
+	outputMgr := NewOutputManager(cfg.CommonConfig.OutputDir)
 
 	awsCfg := aws.Config{}
 	if cfg.CommonConfig.Region != "" {
@@ -64,15 +85,28 @@ func Run(ctx context.Context, cfg DeployConfig) error {
 		}
 		log.Printf("[%s] 实例 IP: %v\n", svc.Type.String(), ips)
 
+		// 记录服务器 IP 列表到输出文件中
+		if err := outputMgr.AddServers(ips, svc.Type.String()); err != nil {
+			log.Printf("写入服务器列表失败: %v\n", err)
+		}
+
 		log.Printf("👉 [%s] 等待每台机器 SSH 就绪...\n", svc.Type.String())
 		if err := waitAllSSHReady(ctx, ips, cfg); err != nil {
 			return err
 		}
 
-		log.Printf("👉 [%s] 批量执行远程命令...\n", svc.Type.String())
-		if err := runCommandsOnInstances(ctx, ec2Client, ips, cfg.CommonConfig, svc); err != nil {
+		log.Printf("👉 [%s] 批量执行远程命令（后台）...\n", svc.Type.String())
+		if err := runCommandsOnInstances(ctx, ec2Client, ips, cfg.CommonConfig, svc, outputMgr); err != nil {
 			return err
 		}
+	}
+
+	log.Println("👉 所有远程命令已启动，开始同步日志与脚本状态...")
+
+	// 所有服务器上的脚本都已启动后，开始同步远端日志并同步到本地，同时更新脚本运行状态。
+	s := NewSync(cfg.CommonConfig, outputMgr)
+	if err := s.Run(ctx); err != nil {
+		return err
 	}
 
 	log.Println("✅ 所有 service 执行完成！")
@@ -182,7 +216,7 @@ func waitAllSSHReady(ctx context.Context, ips []string, cfg DeployConfig) error 
 	return nil
 }
 
-func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []string, cfg CommonConfig, svc ServiceConfig) error {
+func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []string, cfg CommonConfig, svc ServiceConfig, outputMgr *OutputManager) error {
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
@@ -216,16 +250,22 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 				return
 			}
 
-			fullCmd := fmt.Sprintf("sudo -n shutdown -h +%d && %s", int(cfg.RunDuration.Minutes()), cmdStr)
-			log.Printf("[%s] run: %s\n", ip, fullCmd)
+			remoteLogDir := "/home/ubuntu/ydyl-deploy-logs"
+			remoteLogFile := fmt.Sprintf("%s/%s.log", remoteLogDir, name)
 
-			logFilePath := filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", ip, name))
-			logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-			if err != nil {
-				setFirstErr(&mu, &first, fmt.Errorf("打开日志文件失败 %s: %w", logFilePath, err))
-				return
-			}
-			defer logFile.Close()
+			// 在远端后台运行脚本，并将 stdout/stderr 重定向到远端日志文件。
+			// 同时输出子进程 PID，便于后续状态监控。
+			fullCmd := fmt.Sprintf(
+				"sudo -n shutdown -h +%d; mkdir -p %s; cd /home/ubuntu/workspace/ydyl-deployment-suite; nohup %s > %s 2>&1 & echo $!",
+				int(cfg.RunDuration.Minutes()),
+				remoteLogDir,
+				cmdStr,
+				remoteLogFile,
+			)
+
+			log.Printf("[%s] run (background): %s\n", ip, fullCmd)
+
+			localLogPath := filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", ip, name))
 
 			sshCmd := exec.CommandContext(ctx, "ssh",
 				"-o", "StrictHostKeyChecking=no",
@@ -235,13 +275,38 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 				fullCmd,
 			)
 
-			sshCmd.Stdout = logFile
-			sshCmd.Stderr = logFile
+			var stdoutBuf bytes.Buffer
+			sshCmd.Stdout = &stdoutBuf
+			sshCmd.Stderr = &stdoutBuf
 
 			if err := sshCmd.Run(); err != nil {
-				setFirstErr(&mu, &first, fmt.Errorf("[%s] 远程命令执行失败: %w", ip, err))
+				// 为了便于排查 ssh 相关问题（如 exit status 255），这里输出更详细的日志。
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					// 注意：stderr 已经重定向到 logFile，这里只打印 exitCode 和命令本身。
+					log.Printf("[%s] ssh 命令执行失败，exitCode=%d，cmd=%q\n", ip, exitErr.ExitCode(), fullCmd)
+					setFirstErr(&mu, &first, fmt.Errorf("[%s] 远程命令执行失败，exitCode=%d: %w", ip, exitErr.ExitCode(), err))
+				} else {
+					log.Printf("[%s] ssh 命令执行失败（非 ExitError），cmd=%q，err=%v\n", ip, fullCmd, err)
+					setFirstErr(&mu, &first, fmt.Errorf("[%s] 远程命令执行失败: %w", ip, err))
+				}
 				return
 			}
+
+			// 解析远端返回的 PID，用于后续状态监控
+			pid, parseErr := parseRemotePID(stdoutBuf.String())
+			if parseErr != nil {
+				log.Printf("[%s] 解析远端 PID 失败: %v，输出: %q\n", ip, parseErr, stdoutBuf.String())
+			}
+
+			// 初始化脚本运行状态（即使 PID 解析失败，也记录一份基础信息）
+			_ = outputMgr.InitStatus(
+				ip,
+				svc.Type.String(),
+				pid,
+				remoteLogFile,
+				localLogPath,
+				time.Now().Unix(),
+			)
 		}(i, ip)
 	}
 
@@ -331,7 +396,7 @@ func buildRemoteCommandForIndex(i int, svc ServiceConfig, common CommonConfig) (
 		}
 
 		return fmt.Sprintf(
-			"cd /home/ubuntu/workspace/ydyl-deployment-suite && git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t START_STEP=1 ./cdk_pipe.sh",
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t START_STEP=1 ./cdk_pipe.sh",
 			l2ChainID, common.L1ChainId, common.L1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeRelayContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain,
 		), nil
 	case enums.ServiceTypeXJST:
@@ -359,4 +424,102 @@ func setFirstErr(mu *sync.Mutex, first *error, err error) {
 	if *first == nil {
 		*first = err
 	}
+}
+
+// parseRemotePID 从 ssh 返回的输出中解析出远端后台进程的 PID。
+func parseRemotePID(output string) (int, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return 0, fmt.Errorf("PID 输出为空")
+	}
+
+	// ssh 返回中可能包含多行，比如 shutdown 的提示信息 + PID，我们取最后一行非空文本。
+	lines := strings.Split(trimmed, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err == nil {
+			return pid, nil
+		}
+	}
+
+	return 0, fmt.Errorf("无法从输出中解析 PID: %q", output)
+}
+
+// rotateExistingOutputDir 如果指定的 output 目录已存在且非空，则将其重命名为 output-YYYYMMDD-HHMMSS。
+// 时间戳优先使用旧的 script_status.json 的修改时间（近似代表上一次部署结束时间），否则退回当前时间。
+// 用于在每次新的 deploy 前，对上一次的输出做一个简单归档，避免被覆盖。
+func rotateExistingOutputDir(outputDir string) error {
+	if outputDir == "" {
+		return nil
+	}
+
+	info, err := os.Stat(outputDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("outputDir 不是目录: %s", outputDir)
+	}
+
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		// 空目录，无需归档
+		return nil
+	}
+
+	// 尝试用 script_status.json 的修改时间作为时间戳（更接近上一次运行的结束时间）
+	tsTime := time.Now()
+	statusPath := filepath.Join(outputDir, "script_status.json")
+	if stInfo, err := os.Stat(statusPath); err == nil {
+		tsTime = stInfo.ModTime()
+	} else {
+		// 若不存在 script_status.json，则退回到目录本身的 mtime
+		tsTime = info.ModTime()
+	}
+	ts := tsTime.Format("20060102-150405")
+	newPath := fmt.Sprintf("%s-%s", outputDir, ts)
+
+	if err := os.Rename(outputDir, newPath); err != nil {
+		return fmt.Errorf("重命名输出目录失败: %w", err)
+	}
+
+	log.Printf("ℹ️ 检测到已有输出目录 %s，已归档为 %s\n", outputDir, newPath)
+	return nil
+}
+
+// ResumeSync 基于已有的 servers.json / script_status.json 重新同步日志与脚本状态。
+// 适用于部署进程意外退出或者终端关闭后，在不重新创建实例和执行脚本的前提下恢复监控。
+func ResumeSync(ctx context.Context, cfg DeployConfig) error {
+	if err := os.MkdirAll(cfg.CommonConfig.LogDir, 0o755); err != nil {
+		return fmt.Errorf("创建日志目录失败: %w", err)
+	}
+
+	if cfg.CommonConfig.OutputDir == "" {
+		cfg.CommonConfig.OutputDir = filepath.Join(cfg.CommonConfig.LogDir, "output")
+	}
+
+	outputMgr, err := LoadOutputManager(cfg.CommonConfig.OutputDir)
+	if err != nil {
+		return fmt.Errorf("加载输出状态失败: %w", err)
+	}
+
+	log.Println("👉 载入已有 servers.json / script_status.json，开始重新同步日志与脚本状态...")
+
+	s := NewSync(cfg.CommonConfig, outputMgr)
+	if err := s.Run(ctx); err != nil {
+		return err
+	}
+
+	log.Println("✅ 日志与脚本状态同步完成！")
+	return nil
 }
