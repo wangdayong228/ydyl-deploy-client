@@ -18,12 +18,18 @@ type ServerInfo struct {
 type ScriptStatus struct {
 	IP          string `json:"ip"`
 	ServiceType string `json:"serviceType"`
-	PID         int    `json:"pid"`
-	Status      string `json:"status"`              // running / success / failed
-	Reason      string `json:"reason,omitempty"`    // 失败或未知时的原因描述
-	LogPath     string `json:"logPath,omitempty"`   // 远端日志路径
-	LocalLog    string `json:"localLog,omitempty"`  // 本地同步日志路径
-	UpdatedAt   int64  `json:"updatedAt,omitempty"` // 状态最近更新时间（Unix 秒）
+
+	// Name 为本次部署中给这台服务器生成的逻辑名称（通常与 EC2 Name tag 保持一致）
+	Name string `json:"name,omitempty"`
+	// Command 为在这台机器上实际执行的部署命令（不含外层 shutdown/nohup 包装）
+	Command string `json:"command,omitempty"`
+
+	PID       int    `json:"pid"`
+	Status    string `json:"status"`              // running / success / failed / unknown
+	Reason    string `json:"reason,omitempty"`    // 失败或未知时的原因描述
+	LogPath   string `json:"logPath,omitempty"`   // 远端日志路径
+	LocalLog  string `json:"localLog,omitempty"`  // 本地同步日志路径
+	UpdatedAt int64  `json:"updatedAt,omitempty"` // 状态最近更新时间（Unix 秒）
 	// LogSize 记录已经同步的远端日志字节数，用于增量拉取
 	LogSize int64 `json:"logSize,omitempty"`
 }
@@ -89,6 +95,20 @@ func compositeKey(ip, serviceType string) string {
 	return fmt.Sprintf("%s|%s", ip, serviceType)
 }
 
+// SnapshotServers 返回当前记录的服务器列表副本，用于基于已有 output 做二次操作（如 deploy-restore）。
+func (m *OutputManager) SnapshotServers() []ServerInfo {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]ServerInfo, len(m.servers))
+	copy(out, m.servers)
+	return out
+}
+
 // AddServers 将一批服务器信息追加到列表并写入 servers.json。
 func (m *OutputManager) AddServers(ips []string, serviceType string) error {
 	if m == nil {
@@ -109,7 +129,9 @@ func (m *OutputManager) AddServers(ips []string, serviceType string) error {
 }
 
 // InitStatus 初始化某台服务器的脚本运行状态（通常在脚本后台启动成功后调用）。
-func (m *OutputManager) InitStatus(ip, serviceType string, pid int, logPath, localLog string, updatedAt int64) error {
+// name:  逻辑名称（例如 tagPrefix-type-index）
+// cmd:   实际执行的部署命令（不含 shutdown/nohup 等包装）
+func (m *OutputManager) InitStatus(ip, serviceType, name, cmd string, pid int, logPath, localLog string, updatedAt int64) error {
 	if m == nil {
 		return nil
 	}
@@ -121,6 +143,8 @@ func (m *OutputManager) InitStatus(ip, serviceType string, pid int, logPath, loc
 	m.statuses[key] = &ScriptStatus{
 		IP:          ip,
 		ServiceType: serviceType,
+		Name:        name,
+		Command:     cmd,
 		PID:         pid,
 		Status:      "running",
 		LogPath:     logPath,

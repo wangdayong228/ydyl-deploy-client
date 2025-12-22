@@ -29,12 +29,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	cfg := deploy.LoadConfigFromFile(configPath)
 
-	if err := deploy.ResumeSync(ctx, *cfg); err != nil {
+	if err := deploy.ResumeSync(ctx, cfg.CommonConfig); err != nil {
 		fmt.Fprintln(os.Stderr, "sync 失败：", err)
 		return err
 	}
 
 	return nil
 }
-
-

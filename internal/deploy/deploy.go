@@ -250,22 +250,15 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 				return
 			}
 
-			remoteLogDir := "/home/ubuntu/ydyl-deploy-logs"
-			remoteLogFile := fmt.Sprintf("%s/%s.log", remoteLogDir, name)
+			remoteLogFile, remoteLogDir := buildRemoteLogPath("", name)
 
 			// 在远端后台运行脚本，并将 stdout/stderr 重定向到远端日志文件。
 			// 同时输出子进程 PID，便于后续状态监控。
-			fullCmd := fmt.Sprintf(
-				"sudo -n shutdown -h +%d; mkdir -p %s; cd /home/ubuntu/workspace/ydyl-deployment-suite; nohup %s > %s 2>&1 & echo $!",
-				int(cfg.RunDuration.Minutes()),
-				remoteLogDir,
-				cmdStr,
-				remoteLogFile,
-			)
+			fullCmd := buildBackgroundCommand(cfg.RunDuration, cmdStr, remoteLogDir, remoteLogFile)
 
 			log.Printf("[%s] run (background): %s\n", ip, fullCmd)
 
-			localLogPath := filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", ip, name))
+			localLogPath := buildLocalLogPath(cfg.LogDir, ip, name)
 
 			sshCmd := exec.CommandContext(ctx, "ssh",
 				"-o", "StrictHostKeyChecking=no",
@@ -302,6 +295,8 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 			_ = outputMgr.InitStatus(
 				ip,
 				svc.Type.String(),
+				name,
+				cmdStr,
 				pid,
 				remoteLogFile,
 				localLogPath,
@@ -478,7 +473,7 @@ func rotateExistingOutputDir(outputDir string) error {
 	}
 
 	// 尝试用 script_status.json 的修改时间作为时间戳（更接近上一次运行的结束时间）
-	tsTime := time.Now()
+	var tsTime time.Time
 	statusPath := filepath.Join(outputDir, "script_status.json")
 	if stInfo, err := os.Stat(statusPath); err == nil {
 		tsTime = stInfo.ModTime()
@@ -494,32 +489,5 @@ func rotateExistingOutputDir(outputDir string) error {
 	}
 
 	log.Printf("ℹ️ 检测到已有输出目录 %s，已归档为 %s\n", outputDir, newPath)
-	return nil
-}
-
-// ResumeSync 基于已有的 servers.json / script_status.json 重新同步日志与脚本状态。
-// 适用于部署进程意外退出或者终端关闭后，在不重新创建实例和执行脚本的前提下恢复监控。
-func ResumeSync(ctx context.Context, cfg DeployConfig) error {
-	if err := os.MkdirAll(cfg.CommonConfig.LogDir, 0o755); err != nil {
-		return fmt.Errorf("创建日志目录失败: %w", err)
-	}
-
-	if cfg.CommonConfig.OutputDir == "" {
-		cfg.CommonConfig.OutputDir = filepath.Join(cfg.CommonConfig.LogDir, "output")
-	}
-
-	outputMgr, err := LoadOutputManager(cfg.CommonConfig.OutputDir)
-	if err != nil {
-		return fmt.Errorf("加载输出状态失败: %w", err)
-	}
-
-	log.Println("👉 载入已有 servers.json / script_status.json，开始重新同步日志与脚本状态...")
-
-	s := NewSync(cfg.CommonConfig, outputMgr)
-	if err := s.Run(ctx); err != nil {
-		return err
-	}
-
-	log.Println("✅ 日志与脚本状态同步完成！")
 	return nil
 }

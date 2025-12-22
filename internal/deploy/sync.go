@@ -29,6 +29,33 @@ func NewSync(cfg CommonConfig, mgr *OutputManager) *Sync {
 	}
 }
 
+// ResumeSync 基于已有的 script_status.json 重新同步日志与脚本状态。
+// 适用于部署进程意外退出或者终端关闭后，在不重新创建实例和执行脚本的前提下恢复监控。
+func ResumeSync(ctx context.Context, commonCfg CommonConfig) error {
+	if err := os.MkdirAll(commonCfg.LogDir, 0o755); err != nil {
+		return fmt.Errorf("创建日志目录失败: %w", err)
+	}
+
+	if commonCfg.OutputDir == "" {
+		commonCfg.OutputDir = filepath.Join(commonCfg.LogDir, "output")
+	}
+
+	outputMgr, err := LoadOutputManager(commonCfg.OutputDir)
+	if err != nil {
+		return fmt.Errorf("加载输出状态失败: %w", err)
+	}
+
+	log.Println("👉 载入已有 script_status.json，开始重新同步日志与脚本状态...")
+
+	s := NewSync(commonCfg, outputMgr)
+	if err := s.Run(ctx); err != nil {
+		return err
+	}
+
+	log.Println("✅ 日志与脚本状态同步完成！")
+	return nil
+}
+
 // Run 启动同步协程，定期同步远端日志到本地，并根据进程/日志更新脚本运行状态。
 func (m *Sync) Run(ctx context.Context) error {
 	if m == nil || m.outputMgr == nil {
