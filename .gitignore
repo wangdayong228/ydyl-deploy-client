@@ -2,3 +2,4 @@ config.deploy.yaml
 logs
 AGENT.md
 output
+output-*
