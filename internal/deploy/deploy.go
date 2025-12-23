@@ -220,9 +220,24 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
-		first   error
+		errs    []error
 		keyPath = buildSSHKeyPath(cfg)
 	)
+
+	// 并发收集每台机器的错误，最终统一汇总返回（不再只返回“第一个错误”）。
+	addErr := func(ip, name string, err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		// name 可能为空（极少数早期失败场景），统一格式化方便用户排查。
+		if name != "" {
+			errs = append(errs, fmt.Errorf("[%s][%s] %w", ip, name, err))
+		} else {
+			errs = append(errs, fmt.Errorf("[%s] %w", ip, err))
+		}
+	}
 
 	for idx, ip := range ips {
 		i := idx + 1 // service 内部编号，从 1 开始
@@ -232,34 +247,46 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 			defer wg.Done()
 
 			name := fmt.Sprintf("%s-%s-%d", svc.TagPrefix, svc.Type.String(), i)
+			logPrefix := fmt.Sprintf("[%s][%s]", ip, name)
+			log.Printf("%s 开始部署任务\n", logPrefix)
 
 			// 再次确认标签（与 shell 版一致，用 ip -> instanceId -> 打 Name 标签）
+			log.Printf("%s STEP1: 查询实例 ID...\n", logPrefix)
 			instID, err := findInstanceByIP(ctx, ec2Client, ip)
 			if err != nil {
-				setFirstErr(&mu, &first, err)
+				addErr(ip, name, err)
 				return
 			}
-			if err := tagInstanceName(ctx, ec2Client, instID, name); err != nil {
-				setFirstErr(&mu, &first, err)
-				return
-			}
+			log.Printf("%s STEP1: 查询实例 ID 完成，instanceId=%s\n", logPrefix, instID)
 
+			log.Printf("%s STEP2: 设置实例 Name 标签...\n", logPrefix)
+			if err := tagInstanceName(ctx, ec2Client, instID, name); err != nil {
+				addErr(ip, name, err)
+				return
+			}
+			log.Printf("%s STEP2: 设置实例 Name 标签完成\n", logPrefix)
+
+			log.Printf("%s STEP3: 生成远端执行命令...\n", logPrefix)
 			cmdStr, err := buildRemoteCommandForIndex(i, svc, cfg)
 			if err != nil {
-				setFirstErr(&mu, &first, err)
+				addErr(ip, name, err)
 				return
 			}
+			log.Printf("%s STEP3: 生成远端执行命令完成\n", logPrefix)
 
 			remoteLogFile, remoteLogDir := buildRemoteLogPath("", name)
 
 			// 在远端后台运行脚本，并将 stdout/stderr 重定向到远端日志文件。
 			// 同时输出子进程 PID，便于后续状态监控。
+			log.Printf("%s STEP4: 构造远端后台运行命令...\n", logPrefix)
 			fullCmd := buildBackgroundCommand(cfg.RunDuration, cmdStr, remoteLogDir, remoteLogFile)
+			log.Printf("%s STEP4: 构造远端后台运行命令完成\n", logPrefix)
 
-			log.Printf("[%s] run (background): %s\n", ip, fullCmd)
+			log.Printf("%s run (background): %s\n", logPrefix, fullCmd)
 
 			localLogPath := buildLocalLogPath(cfg.LogDir, ip, name)
 
+			log.Printf("%s STEP5: 通过 ssh 启动远端后台任务...\n", logPrefix)
 			sshCmd := exec.CommandContext(ctx, "ssh",
 				"-o", "StrictHostKeyChecking=no",
 				"-o", "IdentitiesOnly=yes",
@@ -276,23 +303,29 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 				// 为了便于排查 ssh 相关问题（如 exit status 255），这里输出更详细的日志。
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					// 注意：stderr 已经重定向到 logFile，这里只打印 exitCode 和命令本身。
-					log.Printf("[%s] ssh 命令执行失败，exitCode=%d，cmd=%q\n", ip, exitErr.ExitCode(), fullCmd)
-					setFirstErr(&mu, &first, fmt.Errorf("[%s] 远程命令执行失败，exitCode=%d: %w", ip, exitErr.ExitCode(), err))
+					log.Printf("%s ssh 命令执行失败，exitCode=%d，cmd=%q\n", logPrefix, exitErr.ExitCode(), fullCmd)
+					addErr(ip, name, fmt.Errorf("远程命令执行失败，exitCode=%d: %w", exitErr.ExitCode(), err))
 				} else {
-					log.Printf("[%s] ssh 命令执行失败（非 ExitError），cmd=%q，err=%v\n", ip, fullCmd, err)
-					setFirstErr(&mu, &first, fmt.Errorf("[%s] 远程命令执行失败: %w", ip, err))
+					log.Printf("%s ssh 命令执行失败（非 ExitError），cmd=%q，err=%v\n", logPrefix, fullCmd, err)
+					addErr(ip, name, fmt.Errorf("远程命令执行失败: %w", err))
 				}
 				return
 			}
+			log.Printf("%s STEP5: ssh 启动远端后台任务完成\n", logPrefix)
 
 			// 解析远端返回的 PID，用于后续状态监控
+			log.Printf("%s STEP6: 解析远端 PID...\n", logPrefix)
 			pid, parseErr := parseRemotePID(stdoutBuf.String())
 			if parseErr != nil {
-				log.Printf("[%s] 解析远端 PID 失败: %v，输出: %q\n", ip, parseErr, stdoutBuf.String())
+				// output 为空/非 PID 都属于异常情况：远端未按预期返回 PID，无法进行后续监控，直接判定失败。
+				addErr(ip, name, fmt.Errorf("解析远端 PID 失败: %w，输出: %q", parseErr, stdoutBuf.String()))
+				return
 			}
+			log.Printf("%s STEP6: 解析远端 PID 完成，pid=%d\n", logPrefix, pid)
 
-			// 初始化脚本运行状态（即使 PID 解析失败，也记录一份基础信息）
-			_ = outputMgr.InitStatus(
+			// 初始化脚本运行状态
+			log.Printf("%s STEP7: 初始化本地运行状态记录...\n", logPrefix)
+			err = outputMgr.InitStatus(
 				ip,
 				svc.Type.String(),
 				name,
@@ -302,11 +335,22 @@ func runCommandsOnInstances(ctx context.Context, ec2Client *ec2.EC2, ips []strin
 				localLogPath,
 				time.Now().Unix(),
 			)
+			if err != nil {
+				addErr(ip, name, err)
+				return
+			}
+			log.Printf("%s STEP7: 初始化本地运行状态记录完成\n", logPrefix)
+			log.Printf("%s 部署任务完成\n", logPrefix)
 		}(i, ip)
 	}
 
 	wg.Wait()
-	return first
+	if len(errs) == 0 {
+		return nil
+	}
+
+	// 汇总错误：每台机器一条，便于一次性定位问题。
+	return deployMultiError{errs: errs}
 }
 
 func buildSSHKeyPath(cfg CommonConfig) string {
@@ -391,7 +435,7 @@ func buildRemoteCommandForIndex(i int, svc ServiceConfig, common CommonConfig) (
 		}
 
 		return fmt.Sprintf(
-			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t START_STEP=1 ./cdk_pipe.sh",
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ./cdk_pipe.sh",
 			l2ChainID, common.L1ChainId, common.L1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeRelayContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain,
 		), nil
 	case enums.ServiceTypeXJST:
@@ -410,16 +454,25 @@ func mkPrivateKeyHex(i int) (string, error) {
 	return fmt.Sprintf("0x%064x", n), nil
 }
 
-func setFirstErr(mu *sync.Mutex, first *error, err error) {
-	if err == nil {
-		return
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if *first == nil {
-		*first = err
-	}
+// deployMultiError 汇总多台机器的部署错误（每台机器一条）。
+// 该错误既便于用户一眼看到全部失败机器，也可通过 Unwrap() []error 做 errors.Is / errors.As。
+type deployMultiError struct {
+	errs []error
 }
+
+func (e deployMultiError) Error() string {
+	if len(e.errs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "共有 %d 台机器部署失败：\n", len(e.errs))
+	for _, err := range e.errs {
+		fmt.Fprintf(&b, "- %s\n", err.Error())
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (e deployMultiError) Unwrap() []error { return e.errs }
 
 // parseRemotePID 从 ssh 返回的输出中解析出远端后台进程的 PID。
 func parseRemotePID(output string) (int, error) {

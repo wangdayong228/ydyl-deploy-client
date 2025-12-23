@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/sshutil"
@@ -42,7 +43,8 @@ func runWaitSSH(cmd *cobra.Command, args []string) error {
 	if len(keyPath) > 0 && keyPath[0] == '~' {
 		home, err := os.UserHomeDir()
 		if err == nil {
-			keyPath = filepath.Join(home, keyPath[1:])
+			rest := strings.TrimPrefix(keyPath[1:], string(filepath.Separator))
+			keyPath = filepath.Join(home, rest)
 		}
 	}
 
