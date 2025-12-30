@@ -417,14 +417,14 @@ func buildRemoteCommandForIndex(i int, svc ServiceConfig, common CommonConfig) (
 	case enums.ServiceTypeGeneric:
 		return "", fmt.Errorf("service=generic 时必须显式配置 remoteCmd")
 	case enums.ServiceTypeOP:
-		pk, err := mkPrivateKeyHex(i)
+		l2ChainID := 10000 + i
+		l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(common.L1VaultMnemonic, i, nil)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
 		}
-		chainID := 10000 + i
 		return fmt.Sprintf(
-			"cd /home/ubuntu/op-work/scripts/deploy-op-stack && PRIVATE_KEY=%s L2_CHAIN_ID=%d ./deploy-with-env.sh",
-			pk, chainID,
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_RELAY_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ./op_pipe.sh",
+			l2ChainID, common.L1ChainId, common.L1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeRelayContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain,
 		), nil
 	case enums.ServiceTypeCDK:
 		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_RELAY_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh
