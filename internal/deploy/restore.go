@@ -31,6 +31,8 @@ func NewRestorer(cfg CommonConfig, mgr *OutputManager) *Restorer {
 // Restore 基于已有的 output/script_status.json 中的服务器列表与命令，
 // 重新在这些机器上执行部署脚本。不会重新创建 EC2 实例，只依赖 CommonConfig 与脚本状态文件。
 func Restore(ctx context.Context, commonCfg CommonConfig) error {
+	log.Printf("👉 开始恢复，配置: %+v\n", commonCfg)
+
 	if err := os.MkdirAll(commonCfg.LogDir, 0o755); err != nil {
 		return fmt.Errorf("创建日志目录失败: %w", err)
 	}

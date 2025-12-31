@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +27,7 @@ import (
 // 1）批量创建对应数量的 EC2 实例；2）等待实例 running；3）获取公网 IP 并等待 SSH 就绪；
 // 4）为每个实例构造远程命令并执行；5）收集日志与执行结果。
 func Run(ctx context.Context, cfg DeployConfig) error {
+	log.Printf("👉 开始部署，配置: %+v\n", cfg)
 
 	if err := os.MkdirAll(cfg.CommonConfig.LogDir, 0o755); err != nil {
 		return fmt.Errorf("创建日志目录失败: %w", err)
@@ -443,15 +443,6 @@ func buildRemoteCommandForIndex(i int, svc ServiceConfig, common CommonConfig) (
 	default:
 		return "", fmt.Errorf("未知的 service 类型: %s", svc.Type.String())
 	}
-}
-
-// mkPrivateKeyHex 将整数转换为 64 位十六进制前缀 0x，模拟 shell 中的 mk_pk。
-func mkPrivateKeyHex(i int) (string, error) {
-	if i <= 0 {
-		return "", fmt.Errorf("索引必须从 1 开始")
-	}
-	n := big.NewInt(int64(i))
-	return fmt.Sprintf("0x%064x", n), nil
 }
 
 // deployMultiError 汇总多台机器的部署错误（每台机器一条）。
