@@ -19,6 +19,8 @@ type ServiceConfig struct {
 
 	Count     uint   `yaml:"count"`
 	RemoteCmd string `yaml:"remoteCmd"`
+
+	L1RpcUrl string `yaml:"l1RpcUrl"`
 }
 
 type CommonConfig struct {
