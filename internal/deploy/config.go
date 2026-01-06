@@ -20,7 +20,8 @@ type ServiceConfig struct {
 	Count     uint   `yaml:"count"`
 	RemoteCmd string `yaml:"remoteCmd"`
 
-	L1RpcUrl string `yaml:"l1RpcUrl"`
+	L1RpcUrl          string `yaml:"l1RpcUrl"`
+	L1VaultFundAmount int64  `yaml:"l1VaultFundAmount"` // 单位：ether
 }
 
 type CommonConfig struct {

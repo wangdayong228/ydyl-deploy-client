@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +18,16 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/nft-rainbow/rainbow-goutils/utils/commonutils"
 	"github.com/openweb3/go-sdk-common/privatekeyhelper"
+	"github.com/openweb3/web3go"
+	"github.com/openweb3/web3go/interfaces"
+	"github.com/openweb3/web3go/signers"
+	"github.com/openweb3/web3go/types"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/constants/enums"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/cryptoutil"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/sshutil"
@@ -98,7 +107,13 @@ func (d *Deployer) Run() error {
 		return nil
 	}
 
-	log.Printf("👉 开始部署，配置: %+v\n", d.cfg)
+	log.Printf("👉 准备部署，为所有 L2 链的 L1 Valut 充值。\n 配置信息: %+v\n", d.cfg)
+	if err := d.fundAllL1Vaults(); err != nil {
+		return fmt.Errorf("为所有 L1 钱包充值失败: %w", err)
+	}
+	// return nil
+
+	log.Println("👉 开始部署")
 
 	for _, svc := range d.cfg.Services {
 		if svc.Count <= 0 {
@@ -282,7 +297,7 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 	}
 
 	for idx, ip := range ips {
-		i := idx + 1 // service 内部编号，从 1 开始
+		i := idx // service 内部编号，从 0 开始
 		wg.Add(1)
 
 		go func(i int, ip string) {
@@ -460,7 +475,7 @@ func (d *Deployer) buildRemoteCommandForIndex(i int, svc ServiceConfig) (string,
 	case enums.ServiceTypeGeneric:
 		return "", fmt.Errorf("service=generic 时必须显式配置 remoteCmd")
 	case enums.ServiceTypeOP:
-		l2ChainID := 10000 + i
+		l2ChainID := d.resolveL2ChainID(svc.Type, i)
 		l1VaultPrivateKey, err := d.resolveL1VaultPrivateKey(common.L1VaultMnemonic, svc.Type, l2ChainID)
 		if err != nil {
 			return "", fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
@@ -472,7 +487,7 @@ func (d *Deployer) buildRemoteCommandForIndex(i int, svc ServiceConfig) (string,
 		), nil
 	case enums.ServiceTypeCDK:
 		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_RELAY_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh
-		l2ChainID := 10000 + i
+		l2ChainID := d.resolveL2ChainID(svc.Type, i)
 		l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(common.L1VaultMnemonic, i, nil)
 		if err != nil {
 			return "", fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
@@ -492,6 +507,87 @@ func (d *Deployer) buildRemoteCommandForIndex(i int, svc ServiceConfig) (string,
 	}
 }
 
+// 从 源L1Vault（L1VaultMnemonic /m/44/60/0/0/0） 分发 L1 eth 到所有 service 的 L1VaultPrivateKey 地址
+func (d *Deployer) fundAllL1Vaults() error {
+	sourceVaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(d.cfg.CommonConfig.L1VaultMnemonic, 0, nil)
+	if err != nil {
+		return fmt.Errorf("生成源 L1Vault 私钥失败: %w", err)
+	}
+
+	targetAddrs := []common.Address{}
+	targetAmounts := []*big.Int{}
+
+	for _, service := range d.cfg.Services {
+		if service.L1VaultFundAmount <= 0 {
+			continue
+		}
+
+		for i := 0; i < int(service.Count); i++ {
+			l2ChainID := d.resolveL2ChainID(service.Type, i)
+			l1VaultPrivateKey, err := d.resolveL1VaultPrivateKey(d.cfg.CommonConfig.L1VaultMnemonic, service.Type, l2ChainID)
+			if err != nil {
+				return fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
+			}
+
+			s := signers.NewPrivateKeySigner(l1VaultPrivateKey)
+			targetAddrs = append(targetAddrs, s.Address())
+			targetAmounts = append(targetAmounts, big.NewInt(1).Mul(big.NewInt(1e18), big.NewInt(service.L1VaultFundAmount)))
+		}
+	}
+
+	sourceVaultSigner := signers.NewPrivateKeySigner(sourceVaultPrivateKey)
+	l1Client, err := web3go.NewClientWithOption(d.cfg.CommonConfig.L1RpcUrl, web3go.ClientOption{
+		SignerManager: signers.NewSignerManager([]interfaces.Signer{sourceVaultSigner}),
+	})
+	if err != nil {
+		return fmt.Errorf("创建 L1 客户端失败: %w", err)
+	}
+
+	for i, targetVaultAddress := range targetAddrs {
+		soureValutAddress := sourceVaultSigner.Address()
+		value := hexutil.Big(*targetAmounts[i])
+
+		err := commonutils.Retry(3, 1000, "发送交易", func() error {
+			txHash, err := l1Client.Eth.SendTransactionByArgs(types.TransactionArgs{
+				From:  &soureValutAddress,
+				To:    &targetVaultAddress,
+				Value: &value,
+			})
+			if err != nil {
+				logrus.WithField("index", i).WithField("amount", value.ToInt()).WithField("from", soureValutAddress).WithField("to", targetVaultAddress).WithField("error", err).Error("发送交易失败")
+				return err
+			}
+			logrus.WithField("index", i).WithField("amount", value.ToInt()).WithField("from", soureValutAddress).WithField("to", targetVaultAddress).WithField("txHash", txHash).Info("发送交易成功")
+
+			if i == len(targetAddrs)-1 {
+				// wait receipt
+				logrus.Info("等待交易确认")
+				for {
+					receipt, err := l1Client.Eth.TransactionReceipt(txHash)
+					if err != nil {
+						return err
+					}
+					if receipt != nil {
+						break
+					}
+					time.Sleep(1000 * time.Millisecond)
+					fmt.Print(".")
+				}
+				fmt.Println()
+			}
+			return nil
+		})
+
+		if err != nil {
+			return fmt.Errorf("发送交易[%d]失败: %w", i, err)
+		}
+	}
+
+	logrus.WithField("total", len(targetAddrs)).Info("发送交易完成")
+
+	return nil
+}
+
 func (d *Deployer) resolveL1VaultPrivateKey(commonL1VaultMnemonic string, serviceType enums.ServiceType, chainId int) (*ecdsa.PrivateKey, error) {
 	l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(commonL1VaultMnemonic, chainId, &privatekeyhelper.MnemonicOption{
 		BaseDerivePath: fmt.Sprintf("m/44'/60'/0'/%d", serviceType),
@@ -500,6 +596,10 @@ func (d *Deployer) resolveL1VaultPrivateKey(commonL1VaultMnemonic string, servic
 		return nil, errors.WithMessagef(err, "根据助记词衍生私钥失败, 服务类型: %s, 链 ID: %d", serviceType, chainId)
 	}
 	return l1VaultPrivateKey, nil
+}
+
+func (d *Deployer) resolveL2ChainID(serviceType enums.ServiceType, index int) int {
+	return 10000 + index
 }
 
 func (d *Deployer) resolveL1RpcUrl(commonL1RpcUrl, svcL1RpcUrl string) string {
