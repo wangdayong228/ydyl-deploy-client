@@ -264,10 +264,6 @@ func checkRemoteProcess(ctx context.Context, user, keyPath, ip string, pid int) 
 // deriveStatusFromLog 尝试根据日志内容推断脚本执行结果。
 // 这里 data 一般是日志的最新一段（不是全量），对于 cdk 脚本足够判断成功/失败。
 func deriveStatusFromLog(data []byte, st *ScriptStatus) (status string, reason string) {
-	if len(data) == 0 {
-		return "success", ""
-	}
-
 	// 去掉 set -x 打印出来的命令行（通常以 "+" 开头），避免命令回显干扰状态判断。
 	s := stripXTraceLines(string(data))
 
@@ -285,12 +281,11 @@ func deriveStatusFromLog(data []byte, st *ScriptStatus) (status string, reason s
 		return "unknown", "无法从日志中判断脚本状态，请查看详细日志"
 	}
 
-	// 非严格判断：如果包含明显的 ERROR/FAIL 关键字，则认为失败。
-	if containsAny(s, []string{"ERROR", "Error", "Failed", "FAIL"}) {
-		// 简单返回第一条匹配到的关键字作为 reason
-		return "failed", "日志中包含错误关键词，请查看详细日志"
+	if containsAny(s, []string{"所有步骤完成"}) {
+		return "success", ""
 	}
-	return "success", ""
+
+	return "failed", "日志中包含错误关键词，请查看详细日志"
 }
 
 func containsAny(s string, subs []string) bool {
