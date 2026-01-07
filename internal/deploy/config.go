@@ -45,7 +45,7 @@ type CommonConfig struct {
 	L1ChainId                  string `yaml:"l1ChainId"`
 	L1RpcUrl                   string `yaml:"l1RpcUrl"`
 	L1VaultMnemonic            string `yaml:"l1VaultMnemonic"`
-	L1BridgeRelayContract      string `yaml:"l1BridgeRelayContract"`
+	L1BridgeHubContract        string `yaml:"l1BridgeHubContract"`
 	L1RegisterBridgePrivateKey string `yaml:"l1RegisterBridgePrivateKey"`
 	DryRun                     bool   `yaml:"dryRun"`
 	ForceDeployL2Chain         bool   `yaml:"forceDeployL2Chain"`
