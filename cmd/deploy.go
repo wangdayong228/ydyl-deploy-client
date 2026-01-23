@@ -22,12 +22,6 @@ func init() {
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "f", "./config.deploy.yaml", "部署配置文件路径（YAML）")
-
-	// err := cmd.MarkFlagRequired("config")
-	// if err != nil {
-	// 	panic(fmt.Sprintf("mark 'config' flag required error: %v", err))
-	// }
-
 	rootCmd.AddCommand(cmd)
 }
 

@@ -604,7 +604,14 @@ func (d *Deployer) resolveL1VaultPrivateKey(commonL1VaultMnemonic string, servic
 }
 
 func (d *Deployer) resolveL2ChainID(serviceType enums.ServiceType, index int) int {
-	return 10000 + index
+	switch serviceType {
+	case enums.ServiceTypeOP, enums.ServiceTypeCDK:
+		return 10000 + index
+	case enums.ServiceTypeXJST:
+		return 0
+	default:
+		return 0
+	}
 }
 
 func (d *Deployer) resolveL1RpcUrl(commonL1RpcUrl, svcL1RpcUrl string) string {
