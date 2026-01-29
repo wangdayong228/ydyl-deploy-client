@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/nft-rainbow/rainbow-goutils/utils/commonutils"
 	"github.com/openweb3/go-sdk-common/privatekeyhelper"
 	"github.com/openweb3/web3go"
@@ -46,6 +47,10 @@ type Deployer struct {
 
 // NewDeployer 负责初始化一次部署执行所需的基础依赖（目录/输出管理/AWS client/SSH key 路径）。
 func NewDeployer(ctx context.Context, cfg DeployConfig) (*Deployer, error) {
+	if err := cfg.CheckValid(); err != nil {
+		return nil, err
+	}
+
 	// 1) 准备日志目录
 	if err := os.MkdirAll(cfg.CommonConfig.LogDir, 0o755); err != nil {
 		return nil, fmt.Errorf("创建日志目录失败: %w", err)
@@ -324,7 +329,7 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 			log.Printf("%s STEP2: 设置实例 Name 标签完成\n", logPrefix)
 
 			log.Printf("%s STEP3: 生成远端执行命令...\n", logPrefix)
-			cmdStr, err := d.buildRemoteCommandForIndex(i, svc)
+			cmdStr, err := d.buildRemoteCommandForIndex(ips, i, svc)
 			if err != nil {
 				addErr(ip, name, err)
 				return
@@ -470,7 +475,7 @@ func (d *Deployer) tagInstanceName(instanceID, name string) error {
 //     命令为：cd /home/ubuntu/op-work/scripts/deploy-op-stack && PRIVATE_KEY=<pk> L2_CHAIN_ID=<id> ./deploy-with-env.sh
 //
 // 后续可在此扩展 cdk / xjst 等模式。
-func (d *Deployer) buildRemoteCommandForIndex(i int, svc ServiceConfig) (string, error) {
+func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc ServiceConfig) (string, error) {
 	common := d.cfg.CommonConfig
 	if svc.RemoteCmd != "" {
 		return svc.RemoteCmd, nil
@@ -493,23 +498,52 @@ func (d *Deployer) buildRemoteCommandForIndex(i int, svc ServiceConfig) (string,
 	case enums.ServiceTypeCDK:
 		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh
 		l2ChainID := d.resolveL2ChainID(svc.Type, i)
-		l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(common.L1VaultMnemonic, i, nil)
+		l1VaultPrivateKey, err := d.resolveL1VaultPrivateKey(common.L1VaultMnemonic, svc.Type, l2ChainID)
 		if err != nil {
 			return "", fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
 		}
-		l1RpcUrl := common.L1RpcUrl
-		if svc.L1RpcUrl != "" {
-			l1RpcUrl = svc.L1RpcUrl
-		}
+		l1RpcUrl := d.resolveL1RpcUrl(common.L1RpcUrl, svc.L1RpcUrl)
 		return fmt.Sprintf(
 			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ./cdk_pipe.sh",
 			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain,
 		), nil
 	case enums.ServiceTypeXJST:
-		return "", fmt.Errorf("service=xjst 时必须显式配置 remoteCmd")
+		groupId := d.resolveXjstGroupId(i)
+		l1VaultPrivateKey, err := d.resolveL1VaultPrivateKey(common.L1VaultMnemonic, svc.Type, groupId)
+		if err != nil {
+			return "", fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
+		}
+		l1RpcUrl := d.resolveL1RpcUrl(common.L1RpcUrl, svc.L1RpcUrl)
+		l1RpcUrlWs := common.L1RpcUrlWs
+		// CHAIN_NODE_IPS='[44.252.111.46,44.247.52.12,54.245.12.147,44.249.51.138]' \
+		// NODE_ID='node-1' \
+		// GROUP_ID=1 \
+		// L1_RPC_URL_WS='ws://47.243.70.39/ws' \
+		// L1_RPC_URL='https://confura.yidaiyilu0.site/espace' \
+		// AUTO_DEPLOY_L1_CONTRACTS='false' \
+		// L2_CHAIN_ID=0 \
+		// L1_CHAIN_ID=1025 \
+		// L1_VAULT_PRIVATE_KEY='0xd01fd3d7fdcc808840d676f4cbff81af45b2641d414d7a00e25c7bf8cc6c7e97' \
+		// L1_BRIDGE_HUB_CONTRACT='0xC6dC4E1a24df87e78Cc4c63C43bdb5c5d9b69a22' \
+		// L1_REGISTER_BRIDGE_PRIVATE_KEY='0xa7c740e7475dc9af937574f95080df8c48ad1035a2cd53111c377b00f29a8fee' \
+		// ./xjst_pipe.sh
+		groupIpsStr := d.resolveXjstGroupIps(globalIps, groupId)
+		nodeId := i%4 + 1
+
+		return fmt.Sprintf(
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && CHAIN_NODE_IPS='%s' NODE_ID='node-%d' GROUP_ID=%d L1_RPC_URL_WS='%s' L1_RPC_URL='%s' AUTO_DEPLOY_L1_CONTRACTS='false' L2_CHAIN_ID=0 L1_CHAIN_ID=%v L1_VAULT_PRIVATE_KEY='%s' L1_BRIDGE_HUB_CONTRACT='%s' L1_REGISTER_BRIDGE_PRIVATE_KEY='%s' ./xjst_pipe.sh",
+			groupIpsStr, nodeId, groupId, l1RpcUrlWs, l1RpcUrl, common.L1ChainId, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey,
+		), nil
+
 	default:
 		return "", fmt.Errorf("未知的 service 类型: %s", svc.Type.String())
 	}
+}
+
+func (d *Deployer) resolveXjstGroupIps(globalIps []string, groupId int) string {
+	groupIps := globalIps[(groupId)*4 : (groupId+1)*4]
+	groupIpsStr := "[" + strings.Join(groupIps, ",") + "]"
+	return groupIpsStr
 }
 
 // 从 源L1Vault（L1VaultMnemonic /m/44/60/0/0/0） 分发 L1 eth 到所有 service 的 L1VaultPrivateKey 地址
@@ -528,12 +562,21 @@ func (d *Deployer) fundAllL1Vaults() error {
 		}
 
 		for i := 0; i < int(service.Count); i++ {
-			l2ChainID := d.resolveL2ChainID(service.Type, i)
-			l1VaultPrivateKey, err := d.resolveL1VaultPrivateKey(d.cfg.CommonConfig.L1VaultMnemonic, service.Type, l2ChainID)
+			var index int
+
+			if service.Type == enums.ServiceTypeXJST {
+				if i%4 != 0 {
+					continue
+				}
+				index = d.resolveXjstGroupId(i)
+			} else {
+				index = d.resolveL2ChainID(service.Type, i)
+			}
+
+			l1VaultPrivateKey, err := d.resolveL1VaultPrivateKey(d.cfg.CommonConfig.L1VaultMnemonic, service.Type, index)
 			if err != nil {
 				return fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
 			}
-
 			s := signers.NewPrivateKeySigner(l1VaultPrivateKey)
 			targetAddrs = append(targetAddrs, s.Address())
 			targetAmounts = append(targetAmounts, big.NewInt(1).Mul(big.NewInt(1e18), big.NewInt(service.L1VaultFundAmount)))
@@ -593,12 +636,16 @@ func (d *Deployer) fundAllL1Vaults() error {
 	return nil
 }
 
-func (d *Deployer) resolveL1VaultPrivateKey(commonL1VaultMnemonic string, serviceType enums.ServiceType, chainId int) (*ecdsa.PrivateKey, error) {
-	l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(commonL1VaultMnemonic, chainId, &privatekeyhelper.MnemonicOption{
+// op/cdk index 为 chainID, xjst index 为 groupID
+func (d *Deployer) resolveL1VaultPrivateKey(commonL1VaultMnemonic string, serviceType enums.ServiceType, index int) (*ecdsa.PrivateKey, error) {
+	l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(commonL1VaultMnemonic, index, &privatekeyhelper.MnemonicOption{
 		BaseDerivePath: fmt.Sprintf("m/44'/60'/0'/%d", serviceType),
 	})
+
+	logrus.WithField("index", index).WithField("serviceType", serviceType).WithField("privateKey", l1VaultPrivateKey).WithField("address", crypto.PubkeyToAddress(l1VaultPrivateKey.PublicKey)).Info("衍生私钥")
+
 	if err != nil {
-		return nil, errors.WithMessagef(err, "根据助记词衍生私钥失败, 服务类型: %s, 链 ID: %d", serviceType, chainId)
+		return nil, errors.WithMessagef(err, "根据助记词衍生私钥失败, 服务类型: %s, 链 ID: %d", serviceType, index)
 	}
 	return l1VaultPrivateKey, nil
 }
@@ -612,6 +659,10 @@ func (d *Deployer) resolveL2ChainID(serviceType enums.ServiceType, index int) in
 	default:
 		return 0
 	}
+}
+
+func (d *Deployer) resolveXjstGroupId(index int) int {
+	return index / 4
 }
 
 func (d *Deployer) resolveL1RpcUrl(commonL1RpcUrl, svcL1RpcUrl string) string {

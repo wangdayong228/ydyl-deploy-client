@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"errors"
 	"time"
 
 	"github.com/nft-rainbow/rainbow-goutils/utils/configutils"
@@ -24,6 +25,13 @@ type ServiceConfig struct {
 	L1VaultFundAmount int64  `yaml:"l1VaultFundAmount"` // 单位：ether
 }
 
+func (s *ServiceConfig) CheckValid() error {
+	if s.Type == enums.ServiceTypeXJST && s.Count%4 != 0 {
+		return errors.New("xjst service count must be divisible by 4")
+	}
+	return nil
+}
+
 type CommonConfig struct {
 	// AWS / EC2 相关（全局）
 	Region          string `yaml:"region"`
@@ -44,6 +52,7 @@ type CommonConfig struct {
 	// 链通用配置
 	L1ChainId                  string `yaml:"l1ChainId"`
 	L1RpcUrl                   string `yaml:"l1RpcUrl"`
+	L1RpcUrlWs                 string `yaml:"l1RpcUrlWs"`
 	L1VaultMnemonic            string `yaml:"l1VaultMnemonic"`
 	L1BridgeHubContract        string `yaml:"l1BridgeHubContract"`
 	L1RegisterBridgePrivateKey string `yaml:"l1RegisterBridgePrivateKey"`
@@ -56,6 +65,15 @@ type DeployConfig struct {
 	CommonConfig `yaml:",inline" mapstructure:",squash"`
 	// 多个 service，每个 service 的数量和命令独立配置
 	Services []ServiceConfig `yaml:"services"`
+}
+
+func (c *DeployConfig) CheckValid() error {
+	for _, s := range c.Services {
+		if err := s.CheckValid(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // LoadConfigFromFile 从 YAML 文件加载配置并转换为内部 DeployConfig 结构

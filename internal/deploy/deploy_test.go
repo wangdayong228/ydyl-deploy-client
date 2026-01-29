@@ -15,9 +15,9 @@ func TestResolveL1VaultPrivateKey_MatchesPrivateKeyHelper(t *testing.T) {
 	d := &Deployer{}
 	mnemonic := "test test test test test test test test test test test junk"
 	serviceType := enums.ServiceTypeOP
-	chainID := 10001
+	index := 10001
 
-	got, err := d.resolveL1VaultPrivateKey(mnemonic, serviceType, chainID)
+	got, err := d.resolveL1VaultPrivateKey(mnemonic, serviceType, index)
 	if err != nil {
 		t.Fatalf("resolveL1VaultPrivateKey returned error: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestResolveL1VaultPrivateKey_MatchesPrivateKeyHelper(t *testing.T) {
 		t.Fatalf("resolveL1VaultPrivateKey returned nil key")
 	}
 
-	want, err := privatekeyhelper.NewFromMnemonic(mnemonic, chainID, &privatekeyhelper.MnemonicOption{
+	want, err := privatekeyhelper.NewFromMnemonic(mnemonic, index, &privatekeyhelper.MnemonicOption{
 		BaseDerivePath: fmt.Sprintf("m/44'/60'/0'/%d", int(serviceType)),
 	})
 	if err != nil {
@@ -36,5 +36,18 @@ func TestResolveL1VaultPrivateKey_MatchesPrivateKeyHelper(t *testing.T) {
 	wantHex := cryptoutil.EcdsaPrivToWeb3Hex(want)
 	if gotHex != wantHex {
 		t.Fatalf("derived key mismatch: got=%s want=%s", gotHex, wantHex)
+	}
+}
+
+func TestResolveXjstGroupIps(t *testing.T) {
+	t.Parallel()
+
+	d := &Deployer{}
+	globalIps := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "192.168.1.4"}
+	groupId := 0
+	got := d.resolveXjstGroupIps(globalIps, groupId)
+	want := "[192.168.1.1,192.168.1.2,192.168.1.3,192.168.1.4]"
+	if got != want {
+		t.Fatalf("resolveXjstGroupIps returned wrong result: got=%s want=%s", got, want)
 	}
 }
