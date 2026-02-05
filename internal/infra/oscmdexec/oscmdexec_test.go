@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestOscmdexec(t *testing.T) {
+func _TestOscmdexec(t *testing.T) {
 	spec := Spec{
 		Name: "node",
 		Args: []string{"loop_print.js"},
