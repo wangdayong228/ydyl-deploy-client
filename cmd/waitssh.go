@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/wangdayong228/ydyl-deploy-client/internal/sshutil"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/utils/sshutil"
 )
 
 var (

@@ -79,3 +79,4 @@ func WaitSSH(ctx context.Context, ip, sshUser, sshKeyPath string) error {
 
 	return fmt.Errorf("[%s] SSH 一直未就绪", ip)
 }
+

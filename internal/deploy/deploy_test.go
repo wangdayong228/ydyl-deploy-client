@@ -6,7 +6,7 @@ import (
 
 	"github.com/openweb3/go-sdk-common/privatekeyhelper"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/constants/enums"
-	"github.com/wangdayong228/ydyl-deploy-client/internal/cryptoutil"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/utils/cryptoutil"
 )
 
 func TestResolveL1VaultPrivateKey_MatchesPrivateKeyHelper(t *testing.T) {

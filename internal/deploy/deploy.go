@@ -30,8 +30,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/constants/enums"
-	"github.com/wangdayong228/ydyl-deploy-client/internal/cryptoutil"
-	"github.com/wangdayong228/ydyl-deploy-client/internal/sshutil"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/utils/cryptoutil"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/utils/sshutil"
 )
 
 // Deployer 承载一次部署执行所需的上下文与依赖，避免参数层层传递。

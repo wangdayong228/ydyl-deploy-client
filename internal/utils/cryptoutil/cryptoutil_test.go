@@ -6,8 +6,6 @@ import (
 	"crypto/rand"
 	"math/big"
 	"testing"
-
-	"github.com/shopspring/decimal"
 )
 
 func TestEcdsaPrivToWeb3Hex_KnownValue(t *testing.T) {
@@ -35,7 +33,6 @@ func TestEcdsaPrivToWeb3Hex_RandomKey_Format(t *testing.T) {
 	}
 
 	s := EcdsaPrivToWeb3Hex(priv)
-
 	if len(s) != 66 { // 0x + 64 hex chars
 		t.Fatalf("unexpected length: got %d, want 66, value=%s", len(s), s)
 	}
@@ -44,11 +41,3 @@ func TestEcdsaPrivToWeb3Hex_RandomKey_Format(t *testing.T) {
 	}
 }
 
-func TestDecimalToBigInt_KnownValue(t *testing.T) {
-	v := decimal.NewFromFloat(0.1)
-	want := big.NewInt(0)
-
-	if v.BigInt().Cmp(want) != 0 {
-		t.Fatalf("decimal.NewFromFloat(0.1).BigInt() = %s, want %s", v.BigInt(), want)
-	}
-}
