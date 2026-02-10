@@ -2,8 +2,10 @@ package crosstxconfig
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -193,38 +195,61 @@ func PickChainEntryIPs(servers []deploy.ServerInfo) (map[string]string, error) {
 	return chainTypeToIP, nil
 }
 
-// GenerateJobs 生成所有有向链对 a->b（a!=b）的 jobs。
+// GenerateJobs 生成 jobs：源链遍历所有链，目标链为随机选取且不为自身。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
 func GenerateJobs(chainTypes []string, infos map[string]*ChainInfo, mnemonic string, txAmount int, blockRange int64) []Job {
-	jobs := make([]Job, 0, len(chainTypes)*len(chainTypes))
+	jobs := make([]Job, 0, len(chainTypes))
 	for _, srcType := range chainTypes {
-		for _, dstType := range chainTypes {
-			if srcType == dstType {
+		targetCandidates := make([]string, 0, len(chainTypes)-1)
+		for _, candidate := range chainTypes {
+			if candidate == srcType {
 				continue
 			}
-
-			source := infos[srcType]
-			target := infos[dstType]
-
-			jobs = append(jobs, Job{
-				TargetL1Bridge:                  target.Contracts.L1Bridge.Hex(),
-				SourceL2Bridge:                  source.Contracts.L2Bridge.Hex(),
-				TargetL2Contract:                target.Summary.L2_COUNTER_CONTRACT.Hex(),
-				L1BridgeReceiver:                source.Summary.L1_BRIDGE_HUB_CONTRACT.Hex(),
-				SourceL2RPC:                     source.Summary.L2_RPC_URL,
-				Mnemonic:                        mnemonic,
-				TxAmount:                        txAmount,
-				SourceL2ChainType:               source.Type,
-				TargetL2ChainType:               target.Type,
-				SourceL2BalanceSenderPrivatekey: source.Summary.L2_PRIVATE_KEY.Hex(),
-
-				TargetL2RPC:    target.Summary.L2_RPC_URL,
-				TargetL2Bridge: target.Contracts.L2Bridge.Hex(),
-				BlockRange:     blockRange,
-			})
+			targetCandidates = append(targetCandidates, candidate)
 		}
+		if len(targetCandidates) == 0 {
+			continue
+		}
+
+		dstType, err := pickRandomTarget(targetCandidates)
+		if err != nil {
+			// 随机数获取失败时回退到第一个候选目标，避免中断配置生成。
+			dstType = targetCandidates[0]
+		}
+
+		source := infos[srcType]
+		target := infos[dstType]
+
+		jobs = append(jobs, Job{
+			TargetL1Bridge:                  target.Contracts.L1Bridge.Hex(),
+			SourceL2Bridge:                  source.Contracts.L2Bridge.Hex(),
+			TargetL2Contract:                target.Summary.L2_COUNTER_CONTRACT.Hex(),
+			L1BridgeReceiver:                source.Summary.L1_BRIDGE_HUB_CONTRACT.Hex(),
+			SourceL2RPC:                     source.Summary.L2_RPC_URL,
+			Mnemonic:                        mnemonic,
+			TxAmount:                        txAmount,
+			SourceL2ChainType:               source.Type,
+			TargetL2ChainType:               target.Type,
+			SourceL2BalanceSenderPrivatekey: source.Summary.L2_PRIVATE_KEY.Hex(),
+
+			TargetL2RPC:    target.Summary.L2_RPC_URL,
+			TargetL2Bridge: target.Contracts.L2Bridge.Hex(),
+			BlockRange:     blockRange,
+		})
 	}
 	return jobs
+}
+
+func pickRandomTarget(candidates []string) (string, error) {
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("候选目标链为空")
+	}
+
+	nBig, err := rand.Int(rand.Reader, big.NewInt(int64(len(candidates))))
+	if err != nil {
+		return "", err
+	}
+	return candidates[int(nBig.Int64())], nil
 }
 
 func GenerateMnemonic12() (string, error) {

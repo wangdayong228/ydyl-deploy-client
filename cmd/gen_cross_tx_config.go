@@ -20,7 +20,7 @@ func init() {
 	cmd := &cobra.Command{
 		Use:   "gen-cross-tx-config",
 		Short: "生成跨链脚本 jobs 配置文件",
-		Long:  "读取 servers.json，调用各链节点上的 ydyl-console-service API 获取 rpc/合约信息，生成跨链脚本(zk-claim-service/scripts/7s_jobs.json)所需的 jobs 配置（包含所有链对 a->b, a!=b）。",
+		Long:  "读取 servers.json，调用各链节点上的 ydyl-console-service API 获取 rpc/合约信息，生成跨链脚本(zk-claim-service/scripts/7s_jobs.json)所需的 jobs 配置（源链遍历所有链，目标链随机选取且不为自身）。",
 		RunE:  runGenCrossTxConfig,
 	}
 

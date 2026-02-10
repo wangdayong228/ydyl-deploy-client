@@ -10,7 +10,7 @@ import (
 )
 
 func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
-	// 只测成功路径：3 条链 (op/cdk/xjst) => 6 个有向组合 a->b。
+	// 只测成功路径：3 条链 (op/cdk/xjst) => 每个源链随机选 1 个目标链，共 3 个 jobs。
 	chainTypes := []string{"cdk", "op", "xjst"}
 
 	infos := map[string]*ChainInfo{
@@ -61,7 +61,8 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 	mnemonic := "test test test test test test test test test test test junk"
 	jobs := GenerateJobs(chainTypes, infos, mnemonic, 1000, 100000)
 
-	require.Len(t, jobs, 6)
+	require.Len(t, jobs, 3)
+	seenSources := make(map[string]struct{}, len(chainTypes))
 	for _, j := range jobs {
 		require.NotEmpty(t, j.SourceL2ChainType)
 		require.NotEmpty(t, j.TargetL2ChainType)
@@ -69,23 +70,23 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, mnemonic, j.Mnemonic)
 		require.Equal(t, 1000, j.TxAmount)
 		require.Equal(t, int64(100000), j.BlockRange)
-	}
+		_, exists := seenSources[j.SourceL2ChainType]
+		require.False(t, exists, "每个源链只能出现一次: %s", j.SourceL2ChainType)
+		seenSources[j.SourceL2ChainType] = struct{}{}
 
-	// 抽样校验 1 组映射：op -> cdk
-	var sample *Job
-	for i := range jobs {
-		if jobs[i].SourceL2ChainType == "op" && jobs[i].TargetL2ChainType == "cdk" {
-			sample = &jobs[i]
-			break
-		}
+		// 动态校验 source/target 映射字段，不依赖具体随机结果。
+		source := infos[j.SourceL2ChainType]
+		target := infos[j.TargetL2ChainType]
+		require.NotNil(t, source)
+		require.NotNil(t, target)
+		require.Equal(t, target.Contracts.L1Bridge.Hex(), j.TargetL1Bridge)
+		require.Equal(t, source.Contracts.L2Bridge.Hex(), j.SourceL2Bridge)
+		require.Equal(t, target.Summary.L2_COUNTER_CONTRACT.Hex(), j.TargetL2Contract)
+		require.Equal(t, source.Summary.L1_BRIDGE_HUB_CONTRACT.Hex(), j.L1BridgeReceiver)
+		require.Equal(t, source.Summary.L2_RPC_URL, j.SourceL2RPC)
+		require.Equal(t, target.Summary.L2_RPC_URL, j.TargetL2RPC)
+		require.Equal(t, target.Contracts.L2Bridge.Hex(), j.TargetL2Bridge)
+		require.Equal(t, source.Summary.L2_PRIVATE_KEY.Hex(), j.SourceL2BalanceSenderPrivatekey)
 	}
-	require.NotNil(t, sample)
-	require.Equal(t, infos["cdk"].Contracts.L1Bridge.Hex(), sample.TargetL1Bridge)
-	require.Equal(t, infos["op"].Contracts.L2Bridge.Hex(), sample.SourceL2Bridge)
-	require.Equal(t, infos["cdk"].Summary.L2_COUNTER_CONTRACT.Hex(), sample.TargetL2Contract)
-	require.Equal(t, infos["op"].Summary.L1_BRIDGE_HUB_CONTRACT.Hex(), sample.L1BridgeReceiver)
-	require.Equal(t, infos["op"].Summary.L2_RPC_URL, sample.SourceL2RPC)
-	require.Equal(t, infos["cdk"].Summary.L2_RPC_URL, sample.TargetL2RPC)
-	require.Equal(t, infos["cdk"].Contracts.L2Bridge.Hex(), sample.TargetL2Bridge)
-	require.Equal(t, infos["op"].Summary.L2_PRIVATE_KEY.Hex(), sample.SourceL2BalanceSenderPrivatekey)
+	require.Len(t, seenSources, len(chainTypes))
 }
