@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
 	ydylconsolesdk "github.com/wangdayong228/ydyl-deploy-client/pkg/ydyl-console-service-sdk"
 )
 
@@ -89,4 +90,58 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, source.Summary.L2_PRIVATE_KEY.Hex(), j.SourceL2BalanceSenderPrivatekey)
 	}
 	require.Len(t, seenSources, len(chainTypes))
+}
+
+func TestPickChainEntries_FilterRules(t *testing.T) {
+	servers := []deploy.ServerInfo{
+		{IP: "1.1.1.2", ServiceType: "op", Name: "ydyl-op-2"},
+		{IP: "1.1.1.1", ServiceType: "op", Name: "ydyl-op-1"},
+		{IP: "2.2.2.3", ServiceType: "cdk", Name: "my-tag-cdk-3"},
+		{IP: "2.2.2.1", ServiceType: "cdk", Name: "my-tag-cdk-1"},
+		{IP: "3.3.3.2", ServiceType: "xjst", Name: "prefix-xjst-1-2"},
+		{IP: "3.3.3.5", ServiceType: "xjst", Name: "prefix-xjst-2-1"},
+	}
+
+	got, err := PickChainEntries(servers)
+	require.NoError(t, err)
+	require.Equal(t, map[string]deploy.ServerInfo{
+		"ydyl-op-2":      {IP: "1.1.1.2", ServiceType: "op", Name: "ydyl-op-2"},
+		"ydyl-op-1":      {IP: "1.1.1.1", ServiceType: "op", Name: "ydyl-op-1"},
+		"my-tag-cdk-3":   {IP: "2.2.2.3", ServiceType: "cdk", Name: "my-tag-cdk-3"},
+		"my-tag-cdk-1":   {IP: "2.2.2.1", ServiceType: "cdk", Name: "my-tag-cdk-1"},
+		"prefix-xjst-2-1": {IP: "3.3.3.5", ServiceType: "xjst", Name: "prefix-xjst-2-1"},
+	}, got)
+}
+
+func TestPickChainEntries_InvalidName_FailFast(t *testing.T) {
+	tests := []struct {
+		name    string
+		servers []deploy.ServerInfo
+	}{
+		{
+			name: "empty name",
+			servers: []deploy.ServerInfo{
+				{IP: "1.1.1.1", ServiceType: "op", Name: ""},
+			},
+		},
+		{
+			name: "invalid op format",
+			servers: []deploy.ServerInfo{
+				{IP: "1.1.1.1", ServiceType: "op", Name: "bad-op"},
+			},
+		},
+		{
+			name: "invalid xjst format",
+			servers: []deploy.ServerInfo{
+				{IP: "3.3.3.1", ServiceType: "xjst", Name: "prefix-xjst-1"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := PickChainEntries(tt.servers)
+			require.Error(t, err)
+		})
+	}
 }

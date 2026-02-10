@@ -12,6 +12,7 @@ import (
 type ServerInfo struct {
 	IP          string `json:"ip"`
 	ServiceType string `json:"serviceType"`
+	Name        string `json:"name,omitempty"`
 }
 
 // ScriptStatus 描述某台服务器上远程脚本的运行状态。
@@ -110,7 +111,7 @@ func (m *OutputManager) SnapshotServers() []ServerInfo {
 }
 
 // AddServers 将一批服务器信息追加到列表并写入 servers.json。
-func (m *OutputManager) AddServers(ips []string, serviceType string) error {
+func (m *OutputManager) AddServers(servers []ServerInfo) error {
 	if m == nil {
 		return nil
 	}
@@ -118,12 +119,7 @@ func (m *OutputManager) AddServers(ips []string, serviceType string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, ip := range ips {
-		m.servers = append(m.servers, ServerInfo{
-			IP:          ip,
-			ServiceType: serviceType,
-		})
-	}
+	m.servers = append(m.servers, servers...)
 
 	return m.saveServersLocked()
 }

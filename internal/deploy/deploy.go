@@ -144,8 +144,16 @@ func (d *Deployer) Run() error {
 		}
 		log.Printf("[%s] 实例 IP: %v\n", svc.Type.String(), ips)
 
-		// 记录服务器 IP 列表到输出文件中
-		if err := d.outputMgr.AddServers(ips, svc.Type.String()); err != nil {
+		// 记录服务器信息到输出文件中（包含与实例 Name tag 一致的逻辑名称）。
+		servers := make([]ServerInfo, 0, len(ips))
+		for idx, ip := range ips {
+			servers = append(servers, ServerInfo{
+				IP:          ip,
+				ServiceType: svc.Type.String(),
+				Name:        d.buildInstanceName(svc.TagPrefix, svc.Type.String(), idx+1),
+			})
+		}
+		if err := d.outputMgr.AddServers(servers); err != nil {
 			log.Printf("写入服务器列表失败: %v\n", err)
 		}
 
@@ -216,7 +224,7 @@ func (d *Deployer) runInstances(svc ServiceConfig) ([]*string, error) {
 
 	// 逐台实例追加/覆盖 Name 标签为 TAG-<service>-1...TAG-<service>-N
 	for i, id := range ids {
-		name := fmt.Sprintf("%s-%s-%d", svc.TagPrefix, svc.Type.String(), i+1)
+		name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
 		_, err := ec2Client.CreateTagsWithContext(d.ctx, &ec2.CreateTagsInput{
 			Resources: []*string{id},
 			Tags: []*ec2.Tag{
@@ -308,7 +316,7 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 		go func(i int, ip string) {
 			defer wg.Done()
 
-			name := fmt.Sprintf("%s-%s-%d", svc.TagPrefix, svc.Type.String(), i)
+			name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
 			logPrefix := fmt.Sprintf("[%s][%s]", ip, name)
 			log.Printf("%s 开始部署任务\n", logPrefix)
 
@@ -418,6 +426,18 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 
 	// 汇总错误：每台机器一条，便于一次性定位问题。
 	return deployMultiError{errs: errs}
+}
+
+func (d *Deployer) buildInstanceName(tagPrefix, serviceType string, ordinal int) string {
+	if serviceType != enums.ServiceTypeXJST.String() {
+		return fmt.Sprintf("%s-%s-%d", tagPrefix, serviceType, ordinal)
+	}
+
+	// ordinal 为 1-based，xjst 命名需要按每 4 个节点分组并输出组内序号 1~4。
+	zeroIndex := ordinal - 1
+	groupID := d.resolveXjstGroupId(zeroIndex)
+	indexInGroup := zeroIndex%4 + 1
+	return fmt.Sprintf("%s-%s-%d-%d", tagPrefix, serviceType, groupID, indexInGroup)
 }
 
 func buildSSHKeyPath(cfg CommonConfig) string {
@@ -662,7 +682,8 @@ func (d *Deployer) resolveL2ChainID(serviceType enums.ServiceType, index int) in
 }
 
 func (d *Deployer) resolveXjstGroupId(index int) int {
-	return index / 4
+	// index 为 0-based，groupId 统一改为 1-based。
+	return index/4 + 1
 }
 
 func (d *Deployer) resolveL1RpcUrl(commonL1RpcUrl, svcL1RpcUrl string) string {

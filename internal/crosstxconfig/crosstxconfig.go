@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sort"
 	"strings"
 
@@ -111,28 +112,28 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		return nil, err
 	}
 
-	chainTypeToIP, err := PickChainEntryIPs(servers)
+	chainEntries, err := PickChainEntries(servers)
 	if err != nil {
 		return nil, err
 	}
-	if len(chainTypeToIP) < 2 {
-		return nil, fmt.Errorf("可用链数量不足（需要至少 2 条链），当前=%d", len(chainTypeToIP))
+	if len(chainEntries) < 2 {
+		return nil, fmt.Errorf("可用链数量不足（需要至少 2 条链），当前=%d", len(chainEntries))
 	}
 
-	chainTypes := make([]string, 0, len(chainTypeToIP))
-	for t := range chainTypeToIP {
-		chainTypes = append(chainTypes, t)
+	chainKeys := make([]string, 0, len(chainEntries))
+	for name := range chainEntries {
+		chainKeys = append(chainKeys, name)
 	}
-	sort.Strings(chainTypes)
+	sort.Strings(chainKeys)
 
-	infos := make(map[string]*ChainInfo, len(chainTypes))
-	for _, t := range chainTypes {
-		ip := chainTypeToIP[t]
-		info, err := fetcher.Fetch(ctx, t, ip)
+	infos := make(map[string]*ChainInfo, len(chainKeys))
+	for _, key := range chainKeys {
+		entry := chainEntries[key]
+		info, err := fetcher.Fetch(ctx, entry.ServiceType, entry.IP)
 		if err != nil {
 			return nil, err
 		}
-		infos[t] = info
+		infos[key] = info
 	}
 
 	mnemonic := strings.TrimSpace(p.Mnemonic)
@@ -144,7 +145,7 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		mnemonic = mn
 	}
 
-	jobs := GenerateJobs(chainTypes, infos, mnemonic, p.TxAmount, p.BlockRange)
+	jobs := GenerateJobs(chainKeys, infos, mnemonic, p.TxAmount, p.BlockRange)
 	if err := WriteJSONFile(p.OutPath, jobs); err != nil {
 		return nil, err
 	}
@@ -152,7 +153,7 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	return &GenerateResult{
 		OutPath:   p.OutPath,
 		Mnemonic:  mnemonic,
-		Chains:    chainTypes,
+		Chains:    chainKeys,
 		JobsCount: len(jobs),
 	}, nil
 }
@@ -169,10 +170,10 @@ func LoadServers(path string) ([]deploy.ServerInfo, error) {
 	return servers, nil
 }
 
-// PickChainEntryIPs 从 servers 列表中为每种链类型挑选一个入口 IP。
-// 仅支持 op/cdk/xjst；遇到其它类型直接返回错误（避免静默生成不完整配置）。
-func PickChainEntryIPs(servers []deploy.ServerInfo) (map[string]string, error) {
-	chainTypeToIP := make(map[string]string)
+// PickChainEntries 从 servers 列表中挑选可参与跨链配置生成的入口节点。
+// 返回值以 name 为唯一键，确保同类型多链（如多个 op/cdk）都可参与。
+func PickChainEntries(servers []deploy.ServerInfo) (map[string]deploy.ServerInfo, error) {
+	entries := make(map[string]deploy.ServerInfo)
 	for _, s := range servers {
 		t := strings.ToLower(strings.TrimSpace(s.ServiceType))
 		if t == "" {
@@ -180,29 +181,92 @@ func PickChainEntryIPs(servers []deploy.ServerInfo) (map[string]string, error) {
 		}
 		switch t {
 		case "op", "cdk", "xjst":
-			if _, exists := chainTypeToIP[t]; exists {
+			name := strings.TrimSpace(s.Name)
+			if name == "" {
+				return nil, fmt.Errorf("servers.json 存在空 name: serviceType=%s ip=%s", t, strings.TrimSpace(s.IP))
+			}
+			index, err := parseServerNameIndex(name, t)
+			if err != nil {
+				return nil, fmt.Errorf("解析 name 失败: serviceType=%s name=%q: %w", t, s.Name, err)
+			}
+			// 仅 xjst 需要过滤 index=1，op/cdk 全部参与。
+			if t == "xjst" && index != 1 {
 				continue
 			}
+
 			ip := strings.TrimSpace(s.IP)
 			if ip == "" {
 				return nil, fmt.Errorf("servers.json 存在空 ip: serviceType=%s", t)
 			}
-			chainTypeToIP[t] = ip
+			if _, exists := entries[name]; exists {
+				return nil, fmt.Errorf("servers.json 存在重复 name=%q", name)
+			}
+			entries[name] = deploy.ServerInfo{
+				IP:          ip,
+				ServiceType: t,
+				Name:        name,
+			}
 		default:
 			return nil, fmt.Errorf("不支持的 serviceType=%q（仅支持 op/cdk/xjst）", s.ServiceType)
 		}
 	}
-	return chainTypeToIP, nil
+	return entries, nil
+}
+
+func parseServerNameIndex(name, serviceType string) (int, error) {
+	parts := strings.Split(strings.TrimSpace(name), "-")
+	switch serviceType {
+	case "op", "cdk":
+		// tagPrefix-serviceType-ordinal
+		if len(parts) < 3 {
+			return 0, fmt.Errorf("name 格式不合法，期望 tagPrefix-%s-ordinal", serviceType)
+		}
+		prefix := strings.Join(parts[:len(parts)-2], "-")
+		if strings.TrimSpace(prefix) == "" {
+			return 0, fmt.Errorf("name 格式不合法，tagPrefix 不能为空")
+		}
+		if strings.ToLower(parts[len(parts)-2]) != serviceType {
+			return 0, fmt.Errorf("name 与 serviceType 不匹配")
+		}
+		ordinal, err := strconv.Atoi(parts[len(parts)-1])
+		if err != nil || ordinal <= 0 {
+			return 0, fmt.Errorf("ordinal 必须是正整数")
+		}
+		return ordinal, nil
+	case "xjst":
+		// tagPrefix-serviceType-groupId-index
+		if len(parts) < 4 {
+			return 0, fmt.Errorf("name 格式不合法，期望 tagPrefix-xjst-groupId-index")
+		}
+		prefix := strings.Join(parts[:len(parts)-3], "-")
+		if strings.TrimSpace(prefix) == "" {
+			return 0, fmt.Errorf("name 格式不合法，tagPrefix 不能为空")
+		}
+		if strings.ToLower(parts[len(parts)-3]) != serviceType {
+			return 0, fmt.Errorf("name 与 serviceType 不匹配")
+		}
+		groupID, err := strconv.Atoi(parts[len(parts)-2])
+		if err != nil || groupID <= 0 {
+			return 0, fmt.Errorf("groupId 必须是正整数")
+		}
+		index, err := strconv.Atoi(parts[len(parts)-1])
+		if err != nil || index < 1 || index > 4 {
+			return 0, fmt.Errorf("index 必须在 1~4")
+		}
+		return index, nil
+	default:
+		return 0, fmt.Errorf("不支持的 serviceType=%q", serviceType)
+	}
 }
 
 // GenerateJobs 生成 jobs：源链遍历所有链，目标链为随机选取且不为自身。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
-func GenerateJobs(chainTypes []string, infos map[string]*ChainInfo, mnemonic string, txAmount int, blockRange int64) []Job {
-	jobs := make([]Job, 0, len(chainTypes))
-	for _, srcType := range chainTypes {
-		targetCandidates := make([]string, 0, len(chainTypes)-1)
-		for _, candidate := range chainTypes {
-			if candidate == srcType {
+func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic string, txAmount int, blockRange int64) []Job {
+	jobs := make([]Job, 0, len(chainKeys))
+	for _, srcKey := range chainKeys {
+		targetCandidates := make([]string, 0, len(chainKeys)-1)
+		for _, candidate := range chainKeys {
+			if candidate == srcKey {
 				continue
 			}
 			targetCandidates = append(targetCandidates, candidate)
@@ -217,7 +281,7 @@ func GenerateJobs(chainTypes []string, infos map[string]*ChainInfo, mnemonic str
 			dstType = targetCandidates[0]
 		}
 
-		source := infos[srcType]
+		source := infos[srcKey]
 		target := infos[dstType]
 
 		jobs = append(jobs, Job{
