@@ -27,6 +27,7 @@ func DefaultRunner(ctx context.Context, spec Spec) error {
 	cmd := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
+	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

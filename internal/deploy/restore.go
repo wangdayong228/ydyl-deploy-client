@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,7 +31,7 @@ func NewRestorer(cfg CommonConfig, mgr *OutputManager) *Restorer {
 
 // Restore 基于已有的 output/script_status.json 中的服务器列表与命令，
 // 重新在这些机器上执行部署脚本。不会重新创建 EC2 实例，只依赖 CommonConfig 与脚本状态文件。
-func Restore(ctx context.Context, commonCfg CommonConfig) error {
+func Restore(ctx context.Context, commonCfg CommonConfig, targetIPs []string) error {
 	log.Printf("👉 开始恢复，配置: %+v\n", commonCfg)
 
 	if err := os.MkdirAll(commonCfg.LogDir, 0o755); err != nil {
@@ -52,8 +53,77 @@ func Restore(ctx context.Context, commonCfg CommonConfig) error {
 		return fmt.Errorf("在输出目录 %s 中未找到任何脚本状态信息（script_status.json 为空或不存在）", commonCfg.OutputDir)
 	}
 
+	filteredStatuses, err := filterStatusesByIPs(statuses, targetIPs)
+	if err != nil {
+		return err
+	}
+
 	restorer := NewRestorer(commonCfg, outputMgr)
-	return restorer.Run(ctx, statuses)
+	return restorer.Run(ctx, filteredStatuses)
+}
+
+func sanitizeTargetIPs(targetIPs []string) []string {
+	if len(targetIPs) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(targetIPs))
+	cleaned := make([]string, 0, len(targetIPs))
+	for _, ip := range targetIPs {
+		trimmed := strings.TrimSpace(ip)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		cleaned = append(cleaned, trimmed)
+	}
+
+	return cleaned
+}
+
+func filterStatusesByIPs(statuses []*ScriptStatus, targetIPs []string) ([]*ScriptStatus, error) {
+	cleanedIPs := sanitizeTargetIPs(targetIPs)
+	if len(cleanedIPs) == 0 {
+		return statuses, nil
+	}
+
+	existingIPs := make(map[string]struct{}, len(statuses))
+	for _, st := range statuses {
+		if st == nil || st.IP == "" {
+			continue
+		}
+		existingIPs[st.IP] = struct{}{}
+	}
+
+	missing := make([]string, 0)
+	for _, ip := range cleanedIPs {
+		if _, ok := existingIPs[ip]; !ok {
+			missing = append(missing, ip)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("指定的 IP 在 script_status.json 中不存在: %s", strings.Join(missing, ", "))
+	}
+
+	allowed := make(map[string]struct{}, len(cleanedIPs))
+	for _, ip := range cleanedIPs {
+		allowed[ip] = struct{}{}
+	}
+
+	filtered := make([]*ScriptStatus, 0, len(statuses))
+	for _, st := range statuses {
+		if st == nil {
+			continue
+		}
+		if _, ok := allowed[st.IP]; ok {
+			filtered = append(filtered, st)
+		}
+	}
+
+	return filtered, nil
 }
 
 // Run 启动恢复流程：基于 script_status.json 中的状态，重新在对应机器上执行脚本，并重新开始同步日志与脚本状态。

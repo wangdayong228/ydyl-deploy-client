@@ -9,6 +9,10 @@ import (
 	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
 )
 
+var (
+	deployRestoreIPs []string
+)
+
 func init() {
 	cmd := &cobra.Command{
 		Use:   "deploy-restore",
@@ -18,6 +22,7 @@ func init() {
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "f", "./config.deploy.yaml", "部署配置文件路径（YAML），用于读取通用配置与 ServiceConfig 列表")
+	cmd.Flags().StringSliceVar(&deployRestoreIPs, "ips", nil, "仅恢复指定 IP 列表（逗号分隔或重复传参），未设置时恢复全部")
 
 	rootCmd.AddCommand(cmd)
 }
@@ -28,7 +33,7 @@ func runDeployRestore(cmd *cobra.Command, args []string) error {
 
 	cfg := deploy.LoadConfigFromFile(configPath)
 
-	if err := deploy.Restore(ctx, cfg.CommonConfig); err != nil {
+	if err := deploy.Restore(ctx, cfg.CommonConfig, deployRestoreIPs); err != nil {
 		fmt.Fprintln(os.Stderr, "deploy-restore 失败：", err)
 		return err
 	}
