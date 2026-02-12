@@ -8,8 +8,8 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tyler-smith/go-bip39"
@@ -74,6 +74,7 @@ func (f SDKFetcher) Fetch(ctx context.Context, chainType, ip string) (*ChainInfo
 
 type GenerateParams struct {
 	ServersPath string
+	ConfigPath  string
 	OutPath     string
 	TxAmount    int
 	BlockRange  int64
@@ -97,6 +98,9 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	if p.ServersPath == "" {
 		return nil, fmt.Errorf("serversPath 不能为空")
 	}
+	if p.ConfigPath == "" {
+		return nil, fmt.Errorf("configPath 不能为空")
+	}
 	if p.OutPath == "" {
 		return nil, fmt.Errorf("outPath 不能为空")
 	}
@@ -105,6 +109,12 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	}
 	if p.BlockRange <= 0 {
 		return nil, fmt.Errorf("blockRange 必须 > 0")
+	}
+
+	deployCfg := deploy.LoadConfigFromFile(p.ConfigPath)
+	l1BridgeReceiver := strings.TrimSpace(deployCfg.L1BridgeHubContract)
+	if l1BridgeReceiver == "" {
+		return nil, fmt.Errorf("deploy 配置中 l1BridgeHubContract 不能为空")
 	}
 
 	servers, err := LoadServers(p.ServersPath)
@@ -145,7 +155,7 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		mnemonic = mn
 	}
 
-	jobs := GenerateJobs(chainKeys, infos, mnemonic, p.TxAmount, p.BlockRange)
+	jobs := GenerateJobs(chainKeys, infos, mnemonic, p.TxAmount, p.BlockRange, l1BridgeReceiver)
 	if err := WriteJSONFile(p.OutPath, jobs); err != nil {
 		return nil, err
 	}
@@ -261,7 +271,7 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 
 // GenerateJobs 生成 jobs：源链遍历所有链，目标链为随机选取且不为自身。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
-func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic string, txAmount int, blockRange int64) []Job {
+func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic string, txAmount int, blockRange int64, l1BridgeReceiver string) []Job {
 	jobs := make([]Job, 0, len(chainKeys))
 	for _, srcKey := range chainKeys {
 		targetCandidates := make([]string, 0, len(chainKeys)-1)
@@ -288,18 +298,19 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic stri
 			TargetL1Bridge:                  target.Contracts.L1Bridge.Hex(),
 			SourceL2Bridge:                  source.Contracts.L2Bridge.Hex(),
 			TargetL2Contract:                target.Summary.L2_COUNTER_CONTRACT.Hex(),
-			L1BridgeReceiver:                source.Summary.L1_BRIDGE_HUB_CONTRACT.Hex(),
-			SourceL2RPC:                     source.Summary.L2_RPC_URL,
+			L1BridgeReceiver:                l1BridgeReceiver,
+			SourceL2RPC:                     replaceLocalhostWithIP(source.Summary.L2_RPC_URL, source.IP),
 			Mnemonic:                        mnemonic,
 			TxAmount:                        txAmount,
 			SourceL2ChainType:               source.Type,
 			TargetL2ChainType:               target.Type,
 			SourceL2BalanceSenderPrivatekey: source.Summary.L2_PRIVATE_KEY.Hex(),
 
-			TargetL2RPC:    target.Summary.L2_RPC_URL,
+			TargetL2RPC:    replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP),
 			TargetL2Bridge: target.Contracts.L2Bridge.Hex(),
 			BlockRange:     blockRange,
 		})
+
 	}
 	return jobs
 }
@@ -314,6 +325,14 @@ func pickRandomTarget(candidates []string) (string, error) {
 		return "", err
 	}
 	return candidates[int(nBig.Int64())], nil
+}
+
+func replaceLocalhostWithIP(url, ip string) string {
+	trimmedIP := strings.TrimSpace(ip)
+	if trimmedIP == "" {
+		return url
+	}
+	return strings.ReplaceAll(url, "127.0.0.1", trimmedIP)
 }
 
 func GenerateMnemonic12() (string, error) {

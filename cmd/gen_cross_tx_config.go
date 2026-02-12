@@ -11,6 +11,7 @@ import (
 
 var (
 	genCrossTxServersPath string
+	genCrossTxConfigPath  string
 	genCrossTxOutPath     string
 	genCrossTxTxAmount    int
 	genCrossTxBlockRange  int64
@@ -26,6 +27,7 @@ func init() {
 
 	cmd.Flags().StringVar(&genCrossTxServersPath, "servers", "", "servers.json 路径（参考 ydyl-deploy-client/output/servers.json）")
 	_ = cmd.MarkFlagRequired("servers")
+	cmd.Flags().StringVar(&genCrossTxConfigPath, "config", "./config.deploy.yaml", "deploy 配置文件路径（用于读取 l1BridgeHubContract）")
 
 	cmd.Flags().StringVar(&genCrossTxOutPath, "out", "./7s_jobs.gen.json", "输出 jobs 配置文件路径（JSON array）")
 	cmd.Flags().IntVar(&genCrossTxTxAmount, "tx-amount", 1000, "tx_amount：每个 job 发送交易数量")
@@ -40,6 +42,7 @@ func runGenCrossTxConfig(cmd *cobra.Command, args []string) error {
 
 	res, err := crosstxconfig.Generate(ctx, crosstxconfig.GenerateParams{
 		ServersPath: genCrossTxServersPath,
+		ConfigPath:  genCrossTxConfigPath,
 		OutPath:     genCrossTxOutPath,
 		TxAmount:    genCrossTxTxAmount,
 		BlockRange:  genCrossTxBlockRange,

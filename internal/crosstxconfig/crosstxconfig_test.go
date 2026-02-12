@@ -60,7 +60,8 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 	}
 
 	mnemonic := "test test test test test test test test test test test junk"
-	jobs := GenerateJobs(chainTypes, infos, mnemonic, 1000, 100000)
+	l1BridgeReceiver := "0x00000000000000000000000000000000000000ff"
+	jobs := GenerateJobs(chainTypes, infos, mnemonic, 1000, 100000, l1BridgeReceiver)
 
 	require.Len(t, jobs, 3)
 	seenSources := make(map[string]struct{}, len(chainTypes))
@@ -83,7 +84,7 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, target.Contracts.L1Bridge.Hex(), j.TargetL1Bridge)
 		require.Equal(t, source.Contracts.L2Bridge.Hex(), j.SourceL2Bridge)
 		require.Equal(t, target.Summary.L2_COUNTER_CONTRACT.Hex(), j.TargetL2Contract)
-		require.Equal(t, source.Summary.L1_BRIDGE_HUB_CONTRACT.Hex(), j.L1BridgeReceiver)
+		require.Equal(t, l1BridgeReceiver, j.L1BridgeReceiver)
 		require.Equal(t, source.Summary.L2_RPC_URL, j.SourceL2RPC)
 		require.Equal(t, target.Summary.L2_RPC_URL, j.TargetL2RPC)
 		require.Equal(t, target.Contracts.L2Bridge.Hex(), j.TargetL2Bridge)
@@ -105,10 +106,10 @@ func TestPickChainEntries_FilterRules(t *testing.T) {
 	got, err := PickChainEntries(servers)
 	require.NoError(t, err)
 	require.Equal(t, map[string]deploy.ServerInfo{
-		"ydyl-op-2":      {IP: "1.1.1.2", ServiceType: "op", Name: "ydyl-op-2"},
-		"ydyl-op-1":      {IP: "1.1.1.1", ServiceType: "op", Name: "ydyl-op-1"},
-		"my-tag-cdk-3":   {IP: "2.2.2.3", ServiceType: "cdk", Name: "my-tag-cdk-3"},
-		"my-tag-cdk-1":   {IP: "2.2.2.1", ServiceType: "cdk", Name: "my-tag-cdk-1"},
+		"ydyl-op-2":       {IP: "1.1.1.2", ServiceType: "op", Name: "ydyl-op-2"},
+		"ydyl-op-1":       {IP: "1.1.1.1", ServiceType: "op", Name: "ydyl-op-1"},
+		"my-tag-cdk-3":    {IP: "2.2.2.3", ServiceType: "cdk", Name: "my-tag-cdk-3"},
+		"my-tag-cdk-1":    {IP: "2.2.2.1", ServiceType: "cdk", Name: "my-tag-cdk-1"},
 		"prefix-xjst-2-1": {IP: "3.3.3.5", ServiceType: "xjst", Name: "prefix-xjst-2-1"},
 	}, got)
 }
