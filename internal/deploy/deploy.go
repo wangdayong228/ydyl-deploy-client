@@ -547,7 +547,10 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 		// L1_BRIDGE_HUB_CONTRACT='0xC6dC4E1a24df87e78Cc4c63C43bdb5c5d9b69a22' \
 		// L1_REGISTER_BRIDGE_PRIVATE_KEY='0xa7c740e7475dc9af937574f95080df8c48ad1035a2cd53111c377b00f29a8fee' \
 		// ./xjst_pipe.sh
-		groupIpsStr := d.resolveXjstGroupIps(globalIps, groupId)
+		groupIpsStr, err := d.resolveXjstGroupIps(globalIps, groupId)
+		if err != nil {
+			return "", fmt.Errorf("解析 xjst 分组 IP 失败: %w", err)
+		}
 		nodeId := i%4 + 1
 
 		return fmt.Sprintf(
@@ -560,10 +563,19 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 	}
 }
 
-func (d *Deployer) resolveXjstGroupIps(globalIps []string, groupId int) string {
-	groupIps := globalIps[(groupId)*4 : (groupId+1)*4]
+func (d *Deployer) resolveXjstGroupIps(globalIps []string, groupId int) (string, error) {
+	if groupId <= 0 {
+		return "", fmt.Errorf("groupId 必须 >= 1，当前为 %d", groupId)
+	}
+	start := (groupId - 1) * 4
+	end := start + 4
+	if start < 0 || end > len(globalIps) {
+		return "", fmt.Errorf("xjst 分组 IP 越界: groupId=%d, start=%d, end=%d, total=%d", groupId, start, end, len(globalIps))
+	}
+
+	groupIps := globalIps[start:end]
 	groupIpsStr := "[" + strings.Join(groupIps, ",") + "]"
-	return groupIpsStr
+	return groupIpsStr, nil
 }
 
 // 从 源L1Vault（L1VaultMnemonic /m/44/60/0/0/0） 分发 L1 eth 到所有 service 的 L1VaultPrivateKey 地址

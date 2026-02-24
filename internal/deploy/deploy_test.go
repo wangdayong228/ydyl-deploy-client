@@ -44,10 +44,25 @@ func TestResolveXjstGroupIps(t *testing.T) {
 
 	d := &Deployer{}
 	globalIps := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "192.168.1.4"}
-	groupId := 0
-	got := d.resolveXjstGroupIps(globalIps, groupId)
+	groupId := 1
+	got, err := d.resolveXjstGroupIps(globalIps, groupId)
+	if err != nil {
+		t.Fatalf("resolveXjstGroupIps returned error: %v", err)
+	}
 	want := "[192.168.1.1,192.168.1.2,192.168.1.3,192.168.1.4]"
 	if got != want {
 		t.Fatalf("resolveXjstGroupIps returned wrong result: got=%s want=%s", got, want)
+	}
+}
+
+func TestResolveXjstGroupIps_OutOfRange(t *testing.T) {
+	t.Parallel()
+
+	d := &Deployer{}
+	globalIps := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "192.168.1.4"}
+
+	_, err := d.resolveXjstGroupIps(globalIps, 2)
+	if err == nil {
+		t.Fatalf("resolveXjstGroupIps expected error for out-of-range groupId")
 	}
 }
