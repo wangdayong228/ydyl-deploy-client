@@ -10,11 +10,12 @@ import (
 )
 
 var (
-	genCrossTxServersPath string
-	genCrossTxConfigPath  string
-	genCrossTxOutPath     string
-	genCrossTxTxAmount    int
-	genCrossTxBlockRange  int64
+	genCrossTxServersPath       string
+	genCrossTxConfigPath        string
+	genCrossTxOutPath           string
+	genCrossTxTxAmountPerWallet int
+	genCrossTxBlockRange        int64
+	genCrossTxWalletAmount      int
 )
 
 func init() {
@@ -30,7 +31,8 @@ func init() {
 	cmd.Flags().StringVar(&genCrossTxConfigPath, "config", "./config.deploy.yaml", "deploy 配置文件路径（用于读取 l1BridgeHubContract）")
 
 	cmd.Flags().StringVar(&genCrossTxOutPath, "out", "./7s_jobs.gen.json", "输出 jobs 配置文件路径（JSON array）")
-	cmd.Flags().IntVar(&genCrossTxTxAmount, "tx-amount", 1000, "tx_amount：每个 job 发送交易数量")
+	cmd.Flags().IntVar(&genCrossTxTxAmountPerWallet, "tx-amount-per-wallet", 1000, "tx_amount_per_wallet：每个 wallet 发送交易数量")
+	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 10, "wallet_amount：每个 job 发送的 wallet 数量")
 	cmd.Flags().Int64Var(&genCrossTxBlockRange, "block-range", 100000, "block_range：查询区块范围")
 
 	rootCmd.AddCommand(cmd)
@@ -41,11 +43,12 @@ func runGenCrossTxConfig(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	res, err := crosstxconfig.Generate(ctx, crosstxconfig.GenerateParams{
-		ServersPath: genCrossTxServersPath,
-		ConfigPath:  genCrossTxConfigPath,
-		OutPath:     genCrossTxOutPath,
-		TxAmount:    genCrossTxTxAmount,
-		BlockRange:  genCrossTxBlockRange,
+		ServersPath:       genCrossTxServersPath,
+		ConfigPath:        genCrossTxConfigPath,
+		OutPath:           genCrossTxOutPath,
+		TxAmountPerWallet: genCrossTxTxAmountPerWallet,
+		WalletAmount:      genCrossTxWalletAmount,
+		BlockRange:        genCrossTxBlockRange,
 	})
 	if err != nil {
 		return err

@@ -25,8 +25,9 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 				L1_BRIDGE_HUB_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000b1"),
 			},
 			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
-				L2Bridge: common.HexToAddress("0x00000000000000000000000000000000000000c1"),
-				L1Bridge: common.HexToAddress("0x00000000000000000000000000000000000000d1"),
+				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c1"),
+				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c1"),
+				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d1"),
 			},
 		},
 		"cdk": {
@@ -39,8 +40,9 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 				L1_BRIDGE_HUB_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000b2"),
 			},
 			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
-				L2Bridge: common.HexToAddress("0x00000000000000000000000000000000000000c2"),
-				L1Bridge: common.HexToAddress("0x00000000000000000000000000000000000000d2"),
+				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c2"),
+				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c2"),
+				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d2"),
 			},
 		},
 		"xjst": {
@@ -53,15 +55,16 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 				L1_BRIDGE_HUB_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000b3"),
 			},
 			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
-				L2Bridge: common.HexToAddress("0x00000000000000000000000000000000000000c3"),
-				L1Bridge: common.HexToAddress("0x00000000000000000000000000000000000000d3"),
+				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c3"),
+				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c3"),
+				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d3"),
 			},
 		},
 	}
 
 	mnemonic := "test test test test test test test test test test test junk"
 	l1BridgeReceiver := "0x00000000000000000000000000000000000000ff"
-	jobs := GenerateJobs(chainTypes, infos, mnemonic, 1000, 100000, l1BridgeReceiver)
+	jobs := GenerateJobs(chainTypes, infos, mnemonic, 1000, 10, 100000, l1BridgeReceiver)
 
 	require.Len(t, jobs, 3)
 	seenSources := make(map[string]struct{}, len(chainTypes))
@@ -70,7 +73,8 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.NotEmpty(t, j.TargetL2ChainType)
 		require.NotEqual(t, j.SourceL2ChainType, j.TargetL2ChainType)
 		require.Equal(t, mnemonic, j.Mnemonic)
-		require.Equal(t, 1000, j.TxAmount)
+		require.Equal(t, 1000, j.TxAmountPerWallet)
+		require.Equal(t, 10, j.WalletAmount)
 		require.Equal(t, int64(100000), j.BlockRange)
 		_, exists := seenSources[j.SourceL2ChainType]
 		require.False(t, exists, "每个源链只能出现一次: %s", j.SourceL2ChainType)
@@ -81,13 +85,13 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		target := infos[j.TargetL2ChainType]
 		require.NotNil(t, source)
 		require.NotNil(t, target)
-		require.Equal(t, target.Contracts.L1Bridge.Hex(), j.TargetL1Bridge)
-		require.Equal(t, source.Contracts.L2Bridge.Hex(), j.SourceL2Bridge)
+		require.Equal(t, target.Contracts.L1BridgeReceiveContract.Hex(), j.TargetL1Bridge)
+		require.Equal(t, source.Contracts.L2BridgeSendContract.Hex(), j.SourceL2Bridge)
 		require.Equal(t, target.Summary.L2_COUNTER_CONTRACT.Hex(), j.TargetL2Contract)
 		require.Equal(t, l1BridgeReceiver, j.L1BridgeReceiver)
 		require.Equal(t, source.Summary.L2_RPC_URL, j.SourceL2RPC)
 		require.Equal(t, target.Summary.L2_RPC_URL, j.TargetL2RPC)
-		require.Equal(t, target.Contracts.L2Bridge.Hex(), j.TargetL2Bridge)
+		require.Equal(t, target.Contracts.L2BridgeReceiveContract.Hex(), j.TargetL2Bridge)
 		require.Equal(t, source.Summary.L2_PRIVATE_KEY.Hex(), j.SourceL2BalanceSenderPrivatekey)
 	}
 	require.Len(t, seenSources, len(chainTypes))

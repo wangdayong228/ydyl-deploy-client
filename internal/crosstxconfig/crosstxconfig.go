@@ -26,7 +26,8 @@ type Job struct {
 	L1BridgeReceiver                string `json:"l1_bridge_receiver"`
 	SourceL2RPC                     string `json:"source_l2_rpc"`
 	Mnemonic                        string `json:"mnemonic"`
-	TxAmount                        int    `json:"tx_amount"`
+	TxAmountPerWallet               int    `json:"tx_amount_per_wallet"`
+	WalletAmount                    int    `json:"wallet_amount"`
 	SourceL2ChainType               string `json:"source_l2_chain_type"`
 	TargetL2ChainType               string `json:"target_l2_chain_type"`
 	SourceL2BalanceSenderPrivatekey string `json:"source_l2_balance_sender_privatekey,omitempty"`
@@ -73,14 +74,13 @@ func (f SDKFetcher) Fetch(ctx context.Context, chainType, ip string) (*ChainInfo
 }
 
 type GenerateParams struct {
-	ServersPath string
-	ConfigPath  string
-	OutPath     string
-	TxAmount    int
-	BlockRange  int64
-
-	// Mnemonic 可选：为空则随机生成一次（12 words），所有 jobs 复用同一个。
-	Mnemonic string
+	ServersPath       string
+	ConfigPath        string
+	OutPath           string
+	TxAmountPerWallet int
+	WalletAmount      int
+	BlockRange        int64
+	Mnemonic          string // Mnemonic 可选：为空则随机生成一次（12 words），所有 jobs 复用同一个。
 }
 
 type GenerateResult struct {
@@ -104,8 +104,11 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	if p.OutPath == "" {
 		return nil, fmt.Errorf("outPath 不能为空")
 	}
-	if p.TxAmount <= 0 {
+	if p.TxAmountPerWallet <= 0 {
 		return nil, fmt.Errorf("txAmount 必须 > 0")
+	}
+	if p.WalletAmount <= 0 {
+		return nil, fmt.Errorf("walletAmount 必须 > 0")
 	}
 	if p.BlockRange <= 0 {
 		return nil, fmt.Errorf("blockRange 必须 > 0")
@@ -155,7 +158,7 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		mnemonic = mn
 	}
 
-	jobs := GenerateJobs(chainKeys, infos, mnemonic, p.TxAmount, p.BlockRange, l1BridgeReceiver)
+	jobs := GenerateJobs(chainKeys, infos, mnemonic, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver)
 	if err := WriteJSONFile(p.OutPath, jobs); err != nil {
 		return nil, err
 	}
@@ -271,7 +274,7 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 
 // GenerateJobs 生成 jobs：源链遍历所有链，目标链为随机选取且不为自身。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
-func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic string, txAmount int, blockRange int64, l1BridgeReceiver string) []Job {
+func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic string, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string) []Job {
 	jobs := make([]Job, 0, len(chainKeys))
 	for _, srcKey := range chainKeys {
 		targetCandidates := make([]string, 0, len(chainKeys)-1)
@@ -295,19 +298,20 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic stri
 		target := infos[dstType]
 
 		jobs = append(jobs, Job{
-			TargetL1Bridge:                  target.Contracts.L1Bridge.Hex(),
-			SourceL2Bridge:                  source.Contracts.L2Bridge.Hex(),
+			TargetL1Bridge:                  target.Contracts.L1BridgeReceiveContract.Hex(),
+			SourceL2Bridge:                  source.Contracts.L2BridgeSendContract.Hex(),
 			TargetL2Contract:                target.Summary.L2_COUNTER_CONTRACT.Hex(),
 			L1BridgeReceiver:                l1BridgeReceiver,
 			SourceL2RPC:                     replaceLocalhostWithIP(source.Summary.L2_RPC_URL, source.IP),
 			Mnemonic:                        mnemonic,
-			TxAmount:                        txAmount,
+			TxAmountPerWallet:               txAmountPerWallet,
+			WalletAmount:                    walletAmount,
 			SourceL2ChainType:               source.Type,
 			TargetL2ChainType:               target.Type,
 			SourceL2BalanceSenderPrivatekey: source.Summary.L2_PRIVATE_KEY.Hex(),
 
 			TargetL2RPC:    replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP),
-			TargetL2Bridge: target.Contracts.L2Bridge.Hex(),
+			TargetL2Bridge: target.Contracts.L2BridgeReceiveContract.Hex(),
 			BlockRange:     blockRange,
 		})
 
