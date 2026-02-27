@@ -89,12 +89,65 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, source.Contracts.L2BridgeSendContract.Hex(), j.SourceL2Bridge)
 		require.Equal(t, target.Summary.L2_COUNTER_CONTRACT.Hex(), j.TargetL2Contract)
 		require.Equal(t, l1BridgeReceiver, j.L1BridgeReceiver)
-		require.Equal(t, source.Summary.L2_RPC_URL, j.SourceL2RPC)
-		require.Equal(t, target.Summary.L2_RPC_URL, j.TargetL2RPC)
+		require.Equal(t, replaceLocalhostWithIP(source.Summary.L2_RPC_URL, source.IP), j.SourceL2RPC)
+		require.Equal(t, replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP), j.TargetL2RPC)
 		require.Equal(t, target.Contracts.L2BridgeReceiveContract.Hex(), j.TargetL2Bridge)
 		require.Equal(t, source.Summary.L2_PRIVATE_KEY.Hex(), j.SourceL2BalanceSenderPrivatekey)
 	}
 	require.Len(t, seenSources, len(chainTypes))
+}
+
+func TestReplaceLocalhostWithIP_RewriteRules(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		ip     string
+		want   string
+	}{
+		{
+			name:   "replace localhost host",
+			rawURL: "http://localhost:30010/l2rpc",
+			ip:     "35.92.243.192",
+			want:   "http://35.92.243.192:30010/l2rpc",
+		},
+		{
+			name:   "replace loopback host",
+			rawURL: "http://127.0.0.1:30010/l2rpc?a=1",
+			ip:     "35.92.243.192",
+			want:   "http://35.92.243.192:30010/l2rpc?a=1",
+		},
+		{
+			name:   "replace private host",
+			rawURL: "http://172.31.34.58:30010",
+			ip:     "44.249.174.85",
+			want:   "http://44.249.174.85:30010",
+		},
+		{
+			name:   "keep public domain",
+			rawURL: "https://op.yidaiyilu0.site/l2rpc",
+			ip:     "35.92.243.192",
+			want:   "https://op.yidaiyilu0.site/l2rpc",
+		},
+		{
+			name:   "keep public ip",
+			rawURL: "http://8.8.8.8:8545",
+			ip:     "35.92.243.192",
+			want:   "http://8.8.8.8:8545",
+		},
+		{
+			name:   "fallback for non standard url",
+			rawURL: "127.0.0.1:30010",
+			ip:     "35.92.243.192",
+			want:   "35.92.243.192:30010",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replaceLocalhostWithIP(tt.rawURL, tt.ip)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestPickChainEntries_FilterRules(t *testing.T) {

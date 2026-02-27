@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -331,12 +333,67 @@ func pickRandomTarget(candidates []string) (string, error) {
 	return candidates[int(nBig.Int64())], nil
 }
 
-func replaceLocalhostWithIP(url, ip string) string {
+func replaceLocalhostWithIP(rawURL, ip string) string {
 	trimmedIP := strings.TrimSpace(ip)
 	if trimmedIP == "" {
-		return url
+		return rawURL
 	}
-	return strings.ReplaceAll(url, "127.0.0.1", trimmedIP)
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || parsedURL.Host == "" {
+		// 兼容非标准 URL 场景，尽量维持旧行为并覆盖 localhost 文本。
+		replacer := strings.NewReplacer("127.0.0.1", trimmedIP, "localhost", trimmedIP)
+		return replacer.Replace(rawURL)
+	}
+
+	if !shouldReplaceHost(parsedURL.Hostname()) {
+		return rawURL
+	}
+
+	port := parsedURL.Port()
+	if port == "" {
+		parsedURL.Host = trimmedIP
+	} else {
+		parsedURL.Host = net.JoinHostPort(trimmedIP, port)
+	}
+	return parsedURL.String()
+}
+
+func shouldReplaceHost(host string) bool {
+	trimmedHost := strings.TrimSpace(host)
+	if trimmedHost == "" {
+		return false
+	}
+	if strings.EqualFold(trimmedHost, "localhost") {
+		return true
+	}
+
+	parsedIP := net.ParseIP(trimmedHost)
+	if parsedIP == nil {
+		return false
+	}
+	if parsedIP.IsLoopback() {
+		return true
+	}
+	return isPrivateIPv4(parsedIP)
+}
+
+func isPrivateIPv4(ip net.IP) bool {
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+
+	switch {
+	case v4[0] == 10:
+		return true
+	case v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31:
+		return true
+	case v4[0] == 192 && v4[1] == 168:
+		return true
+	default:
+		return false
+	}
 }
 
 func GenerateMnemonic12() (string, error) {
