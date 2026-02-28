@@ -74,6 +74,7 @@ type XjstNodeDeploymentContracts struct {
 	L1SimpleCalculator common.Address
 	L1StateSender      common.Address
 	L1UnifiedBridge    common.Address
+	L1StartEpoch       int64 `json:"l1_start_epoch,omitempty"`
 	L2StateSender      common.Address
 	L2UnifiedBridge    common.Address
 }
