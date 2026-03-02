@@ -25,6 +25,7 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 				L1_BRIDGE_HUB_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000b1"),
 			},
 			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
+				L1BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000e1"),
 				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c1"),
 				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c1"),
 				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d1"),
@@ -40,6 +41,7 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 				L1_BRIDGE_HUB_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000b2"),
 			},
 			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
+				L1BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000e2"),
 				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c2"),
 				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c2"),
 				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d2"),
@@ -55,6 +57,7 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 				L1_BRIDGE_HUB_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000b3"),
 			},
 			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
+				L1BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000e3"),
 				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c3"),
 				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c3"),
 				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d3"),
@@ -85,7 +88,11 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		target := infos[j.TargetL2ChainType]
 		require.NotNil(t, source)
 		require.NotNil(t, target)
-		require.Equal(t, target.Contracts.L1BridgeReceiveContract.Hex(), j.TargetL1Bridge)
+		expectedTargetL1Bridge := target.Contracts.L1BridgeReceiveContract.Hex()
+		if target.Type == "xjst" {
+			expectedTargetL1Bridge = target.Contracts.L1BridgeSendContract.Hex()
+		}
+		require.Equal(t, expectedTargetL1Bridge, j.TargetL1Bridge)
 		require.Equal(t, source.Contracts.L2BridgeSendContract.Hex(), j.SourceL2Bridge)
 		require.Equal(t, target.Summary.L2_COUNTER_CONTRACT.Hex(), j.TargetL2Contract)
 		require.Equal(t, l1BridgeReceiver, j.L1BridgeReceiver)

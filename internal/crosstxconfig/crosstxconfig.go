@@ -299,7 +299,7 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic stri
 		source := infos[srcKey]
 		target := infos[dstType]
 
-		jobs = append(jobs, Job{
+		job := Job{
 			TargetL1Bridge:                  target.Contracts.L1BridgeReceiveContract.Hex(),
 			SourceL2Bridge:                  source.Contracts.L2BridgeSendContract.Hex(),
 			TargetL2Contract:                target.Summary.L2_COUNTER_CONTRACT.Hex(),
@@ -315,7 +315,13 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic stri
 			TargetL2RPC:    replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP),
 			TargetL2Bridge: target.Contracts.L2BridgeReceiveContract.Hex(),
 			BlockRange:     blockRange,
-		})
+		}
+
+		if target.Type == "xjst" {
+			job.TargetL1Bridge = target.Contracts.L1BridgeSendContract.Hex()
+		}
+
+		jobs = append(jobs, job)
 
 	}
 	return jobs
