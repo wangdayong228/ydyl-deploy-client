@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -183,22 +184,25 @@ func (m *Sync) fetchRemoteLogDelta(ctx context.Context, user, keyPath, ip, remot
 	sizeCmd := exec.CommandContext(ctx, "ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 		"-i", keyPath,
 		fmt.Sprintf("%s@%s", user, ip),
 		fmt.Sprintf(`wc -c < %s 2>/dev/null || echo 0`, remotePath),
 	)
 
 	var sizeOut bytes.Buffer
+	var sizeErr bytes.Buffer
 	sizeCmd.Stdout = &sizeOut
-	sizeCmd.Stderr = &sizeOut
+	sizeCmd.Stderr = &sizeErr
 
 	if err := sizeCmd.Run(); err != nil {
 		return nil, lastSize, err
 	}
 
-	var newSize int64
-	if _, err := fmt.Sscan(sizeOut.String(), &newSize); err != nil {
-		return nil, lastSize, fmt.Errorf("解析远端日志大小失败: %q, err=%v", sizeOut.String(), err)
+	newSize, err := parseLastInt64Line(sizeOut.String())
+	if err != nil {
+		return nil, lastSize, fmt.Errorf("解析远端日志大小失败: stdout=%q, stderr=%q, err=%v", sizeOut.String(), sizeErr.String(), err)
 	}
 
 	if newSize <= lastSize {
@@ -211,6 +215,8 @@ func (m *Sync) fetchRemoteLogDelta(ctx context.Context, user, keyPath, ip, remot
 	logCmd := exec.CommandContext(ctx, "ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 		"-i", keyPath,
 		fmt.Sprintf("%s@%s", user, ip),
 		fmt.Sprintf("tail -c +%d %s 2>/dev/null || true", start, remotePath),
@@ -246,6 +252,8 @@ func checkRemoteProcess(ctx context.Context, user, keyPath, ip string, pid int) 
 	sshCmd := exec.CommandContext(ctx, "ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 		"-i", keyPath,
 		fmt.Sprintf("%s@%s", user, ip),
 		fmt.Sprintf("ps -p %d -o pid=", pid),
@@ -295,6 +303,27 @@ func containsAny(s string, subs []string) bool {
 		}
 	}
 	return false
+}
+
+func parseLastInt64Line(output string) (int64, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return 0, fmt.Errorf("输出为空")
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		val, err := strconv.ParseInt(line, 10, 64)
+		if err == nil {
+			return val, nil
+		}
+	}
+
+	return 0, fmt.Errorf("未找到可解析的整数行: %q", output)
 }
 
 // stripXTraceLines 过滤掉 bash set -x 打印出来的命令行（通常以 "+" 开头），只保留真实业务输出。
