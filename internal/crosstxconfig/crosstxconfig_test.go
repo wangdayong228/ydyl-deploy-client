@@ -65,17 +65,22 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		},
 	}
 
-	mnemonic := "test test test test test test test test test test test junk"
 	l1BridgeReceiver := "0x00000000000000000000000000000000000000ff"
-	jobs := GenerateJobs(chainTypes, infos, mnemonic, 1000, 10, 100000, l1BridgeReceiver)
+	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, l1BridgeReceiver)
+	require.NoError(t, err)
 
 	require.Len(t, jobs, 3)
+	var firstMnemonic string
 	seenSources := make(map[string]struct{}, len(chainTypes))
 	for _, j := range jobs {
 		require.NotEmpty(t, j.SourceL2ChainType)
 		require.NotEmpty(t, j.TargetL2ChainType)
 		require.NotEqual(t, j.SourceL2ChainType, j.TargetL2ChainType)
-		require.Equal(t, mnemonic, j.Mnemonic)
+		require.NotEmpty(t, j.Mnemonic)
+		if firstMnemonic == "" {
+			firstMnemonic = j.Mnemonic
+		}
+		require.Equal(t, firstMnemonic, j.Mnemonic, "所有 job 应复用同一助记词")
 		require.Equal(t, 1000, j.TxAmountPerWallet)
 		require.Equal(t, 10, j.WalletAmount)
 		require.Equal(t, int64(100000), j.BlockRange)

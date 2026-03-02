@@ -82,12 +82,10 @@ type GenerateParams struct {
 	TxAmountPerWallet int
 	WalletAmount      int
 	BlockRange        int64
-	Mnemonic          string // Mnemonic 可选：为空则随机生成一次（12 words），所有 jobs 复用同一个。
 }
 
 type GenerateResult struct {
 	OutPath   string
-	Mnemonic  string
 	Chains    []string
 	JobsCount int
 }
@@ -151,23 +149,16 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		infos[key] = info
 	}
 
-	mnemonic := strings.TrimSpace(p.Mnemonic)
-	if mnemonic == "" {
-		mn, err := GenerateMnemonic12()
-		if err != nil {
-			return nil, err
-		}
-		mnemonic = mn
+	jobs, err := GenerateJobs(chainKeys, infos, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver)
+	if err != nil {
+		return nil, err
 	}
-
-	jobs := GenerateJobs(chainKeys, infos, mnemonic, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver)
 	if err := WriteJSONFile(p.OutPath, jobs); err != nil {
 		return nil, err
 	}
 
 	return &GenerateResult{
 		OutPath:   p.OutPath,
-		Mnemonic:  mnemonic,
 		Chains:    chainKeys,
 		JobsCount: len(jobs),
 	}, nil
@@ -275,8 +266,13 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 }
 
 // GenerateJobs 生成 jobs：源链遍历所有链，目标链为随机选取且不为自身。
+// 助记词在内部随机生成一次（12 words），所有 jobs 复用同一个。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
-func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic string, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string) []Job {
+func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string) ([]Job, error) {
+	mnemonic, err := GenerateMnemonic12()
+	if err != nil {
+		return nil, err
+	}
 	jobs := make([]Job, 0, len(chainKeys))
 	for _, srcKey := range chainKeys {
 		targetCandidates := make([]string, 0, len(chainKeys)-1)
@@ -324,7 +320,7 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, mnemonic stri
 		jobs = append(jobs, job)
 
 	}
-	return jobs
+	return jobs, nil
 }
 
 func pickRandomTarget(candidates []string) (string, error) {
