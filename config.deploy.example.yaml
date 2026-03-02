@@ -1,18 +1,27 @@
 # 示例部署配置，仅供参考，请根据实际环境修改
 
 # AWS / EC2 基本配置
-region: ap-southeast-1
-ami: ami-0d5d4434d0110b7e1
-instanceType: c6a.xlarge
-keyName: your-pem-key-name                # 对应本地 ~/.ssh/your-pem-key-name.pem
-securityGroupId: your-security-group-id
-tagPrefix: your-tag-prefix
+region: us-west-2
+securityGroupId: sg-0ed924fdf3170b7de
+diskSizeGiB: 200                        # 所有实例的系统盘大小（GiB）
 
 # 运行与 SSH
-runDuration: 50m                         # 计划关机时间（time.Duration 格式），会转成 sudo -n shutdown -h +N
+runDuration: 10000m                        # 计划关机时间（time.Duration 格式），会转成 sudo -n shutdown -h +N
 sshUser: ubuntu
-sshKeyDir: ""                            # 为空则默认使用 ~/.ssh
+sshKeyDir: ""                           # 为空则默认使用 ~/.ssh
+keyName: dayong-op-stack               # 对应本地 ~/.ssh/dayong-op-stack.pem
 logDir: logs
+outputDir: output
+
+# 链通用配置
+l1ChainId: 7655 #3151908
+l1RpcUrl: http://184.32.182.132/espace # https://confura.yidaiyilu0.site/espace #https://eth.yidaiyilu0.site/rpc 
+l1RpcUrlWs: ws://184.32.182.132/ws # ws://47.243.70.39/ws
+l1VaultMnemonic: "recall pistol island shrimp flash match wisdom habit dry drop finish double" # 源L1Vault（L1VaultMnemonic /m/44/60/0/0/0） 0xcE4CC6E76635FfAAD91a587f204011D3d3B96EB9
+l1BridgeHubContract: 0x7aC81f608D15819148317EeAD3169734664205Bb
+l1RegisterBridgePrivateKey: 0xa3d9e98f0ba98960bf3755b7519d18b2250b0b8be5e38d5483dcfa3875df2d6f # 0xef431755Bb97ed53874E3e27cAD2cD3399558e25
+dryRun: false
+forceDeployL2Chain: false
 
 # services 为一个数组，每个元素表示一种 service 类型及其数量和命令
 services:
@@ -21,21 +30,43 @@ services:
   #    命令示意：
   #      cd /home/ubuntu/op-work/scripts/deploy-op-stack &&
   #      PRIVATE_KEY=<pk> L2_CHAIN_ID=<id> ./deploy-with-env.sh
-  - type: op
-    count: 3
+  # - type: op
+  #   count: 1
+  #   ami: ami-01695c193bcf5ba8e
+  #   instanceType: c6a.4xlarge
+  #   tagPrefix: ydyl
+  #   remoteCmd: ""
+  #   l1RpcUrl: "http://184.32.182.132:3031" # 如果为空则使用全局 l1RpcUrl, 
+  #   l1VaultFundAmount: "10000"
+
+  # # 2) CDK 部署：这里显式配置 remote_cmd
+  # # L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh
+  # - type: cdk
+  #   count: 1
+  #   ami: ami-01175d2eebb73e5a3
+  #   instanceType: c6a.4xlarge
+  #   tagPrefix: ydyl
+  #   remoteCmd: ""
+  #   l1RpcUrl: ""
+  #   l1VaultFundAmount: "10000"
+
+  # # 3) XJST 部署：这里显式配置 remote_cmd
+  - type: xjst
+    count: 40
+    ami: ami-030f1190179ead09b #ami-01d2928e261094460
+    instanceType: c6a.2xlarge
+    tagPrefix: ydyl
     remoteCmd: ""
+    l1RpcUrl: ""
+    l1VaultFundAmount: "10000"
 
-  # 2) CDK 部署：这里显式配置 remote_cmd
-  - type: cdk
-    count: 2
-    remoteCmd: >
-      cd /home/ubuntu/cdk-work/scripts &&
-      L2_CHAIN_ID=10001 L1_CHAIN_ID=71 L1_RPC_URL=https://cfx-testnet-cdk-rpc-proxy.yidaiyilu0.site
-      ./deploy.sh cdk-gen
-
-  # 3) 通用服务：必须显式指定 remote_cmd
-  - type: generic
-    count: 1
-    remoteCmd: "cd /home/ubuntu/some-service && ./start.sh"
+  # # 4) 通用服务：必须显式指定 remote_cmd
+  # - type: generic
+  #   count: 1
+  #   ami: ami-08b9e4f05aa4bf8c3
+  #   instanceType: c6a.xlarge
+  #   keyName: dayong-op-stack                # 对应本地 ~/.ssh/dayong-op-stack.pem
+  #   tagPrefix: dy-op
+  #   remoteCmd: "ls -la"
 
 
