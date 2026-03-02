@@ -269,10 +269,7 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 // 助记词在内部随机生成一次（12 words），所有 jobs 复用同一个。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
 func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string) ([]Job, error) {
-	mnemonic, err := GenerateMnemonic12()
-	if err != nil {
-		return nil, err
-	}
+
 	jobs := make([]Job, 0, len(chainKeys))
 	for _, srcKey := range chainKeys {
 		targetCandidates := make([]string, 0, len(chainKeys)-1)
@@ -290,6 +287,11 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 		if err != nil {
 			// 随机数获取失败时回退到第一个候选目标，避免中断配置生成。
 			dstType = targetCandidates[0]
+		}
+
+		mnemonic, err := GenerateMnemonic12()
+		if err != nil {
+			return nil, err
 		}
 
 		source := infos[srcKey]
