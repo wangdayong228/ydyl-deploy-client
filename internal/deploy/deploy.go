@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"math/big"
@@ -43,6 +45,8 @@ type Deployer struct {
 	ec2Client  *ec2.EC2
 	outputMgr  *OutputManager
 	sshKeyPath string
+	// 同一轮 deploy 固定随机段，用于 L1 vault 私钥派生路径倒数第三段。
+	l1VaultDeriveRand uint32
 }
 
 // NewDeployer 负责初始化一次部署执行所需的基础依赖（目录/输出管理/AWS client/SSH key 路径）。
@@ -85,14 +89,27 @@ func NewDeployer(ctx context.Context, cfg DeployConfig) (*Deployer, error) {
 
 	// 5) 预计算 SSH key 路径
 	keyPath := buildSSHKeyPath(cfg.CommonConfig)
+	deriveRand, err := generateL1VaultDeriveRand()
+	if err != nil {
+		return nil, fmt.Errorf("生成 L1 vault 派生随机段失败: %w", err)
+	}
 
 	return &Deployer{
-		ctx:        ctx,
-		cfg:        cfg,
-		ec2Client:  ec2Client,
-		outputMgr:  outputMgr,
-		sshKeyPath: keyPath,
+		ctx:               ctx,
+		cfg:               cfg,
+		ec2Client:         ec2Client,
+		outputMgr:         outputMgr,
+		sshKeyPath:        keyPath,
+		l1VaultDeriveRand: deriveRand,
 	}, nil
+}
+
+func generateL1VaultDeriveRand() (uint32, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint32(b[:]), nil
 }
 
 // Run 按照 DeployConfig 中的参数，完成一次完整的批量部署流程：
@@ -670,15 +687,22 @@ func (d *Deployer) fundAllL1Vaults() error {
 
 // op/cdk index 为 chainID, xjst index 为 groupID
 func (d *Deployer) resolveL1VaultPrivateKey(commonL1VaultMnemonic string, serviceType enums.ServiceType, index int) (*ecdsa.PrivateKey, error) {
+	deriveRand := d.l1VaultDeriveRand
+	derivePath := fmt.Sprintf("m/44'/60'/%d/%d", deriveRand, serviceType)
 	l1VaultPrivateKey, err := privatekeyhelper.NewFromMnemonic(commonL1VaultMnemonic, index, &privatekeyhelper.MnemonicOption{
-		BaseDerivePath: fmt.Sprintf("m/44'/60'/0'/%d", serviceType),
+		BaseDerivePath: derivePath,
 	})
-
-	logrus.WithField("index", index).WithField("serviceType", serviceType).WithField("privateKey", l1VaultPrivateKey).WithField("address", crypto.PubkeyToAddress(l1VaultPrivateKey.PublicKey)).Info("衍生私钥")
 
 	if err != nil {
 		return nil, errors.WithMessagef(err, "根据助记词衍生私钥失败, 服务类型: %s, 链 ID: %d", serviceType, index)
 	}
+	logrus.WithField("deriveRand", deriveRand).
+		WithField("derivePath", derivePath).
+		WithField("index", index).
+		WithField("serviceType", serviceType).
+		WithField("privateKey", l1VaultPrivateKey).
+		WithField("address", crypto.PubkeyToAddress(l1VaultPrivateKey.PublicKey)).
+		Info("衍生私钥")
 	return l1VaultPrivateKey, nil
 }
 
