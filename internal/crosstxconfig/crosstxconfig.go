@@ -265,28 +265,34 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 	}
 }
 
-// GenerateJobs 生成 jobs：源链遍历所有链，目标链为随机选取且不为自身。
+// GenerateJobs 生成 jobs：源链遍历所有链，目标链默认随机选取且不为自身；
+// 当源链为 xjst 时，目标链固定为源链自身。
 // 助记词在内部随机生成一次（12 words），所有 jobs 复用同一个。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
 func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string) ([]Job, error) {
 
 	jobs := make([]Job, 0, len(chainKeys))
 	for _, srcKey := range chainKeys {
-		targetCandidates := make([]string, 0, len(chainKeys)-1)
-		for _, candidate := range chainKeys {
-			if candidate == srcKey {
+		source := infos[srcKey]
+		dstType := srcKey
+		if source.Type != "xjst" {
+			targetCandidates := make([]string, 0, len(chainKeys)-1)
+			for _, candidate := range chainKeys {
+				if candidate == srcKey {
+					continue
+				}
+				targetCandidates = append(targetCandidates, candidate)
+			}
+			if len(targetCandidates) == 0 {
 				continue
 			}
-			targetCandidates = append(targetCandidates, candidate)
-		}
-		if len(targetCandidates) == 0 {
-			continue
-		}
 
-		dstType, err := pickRandomTarget(targetCandidates)
-		if err != nil {
-			// 随机数获取失败时回退到第一个候选目标，避免中断配置生成。
-			dstType = targetCandidates[0]
+			var err error
+			dstType, err = pickRandomTarget(targetCandidates)
+			if err != nil {
+				// 随机数获取失败时回退到第一个候选目标，避免中断配置生成。
+				dstType = targetCandidates[0]
+			}
 		}
 
 		mnemonic, err := GenerateMnemonic12()
@@ -294,7 +300,6 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 			return nil, err
 		}
 
-		source := infos[srcKey]
 		target := infos[dstType]
 
 		job := Job{
