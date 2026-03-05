@@ -43,8 +43,14 @@ type CommonConfig struct {
 	RunDuration time.Duration `yaml:"runDuration"`
 	SSHUser     string        `yaml:"sshUser"`
 	SSHKeyDir   string        `yaml:"sshKeyDir"` // 为空时默认使用 $HOME/.ssh
-	KeyName     string        `yaml:"keyName"`
-	LogDir      string        `yaml:"logDir"`
+	// SSHMaxConcurrency 控制 SSH 相关任务的最大并发（包括 SSH 就绪探测与远程命令启动）。
+	SSHMaxConcurrency uint `yaml:"sshMaxConcurrency"`
+	// SSHReadyRetryCount 是 SSH 就绪探测失败后的重试次数（不含首次尝试）。
+	SSHReadyRetryCount uint `yaml:"sshReadyRetryCount"`
+	// SSHReadyRetryInterval 是 SSH 就绪探测每次重试之间的等待间隔。
+	SSHReadyRetryInterval time.Duration `yaml:"sshReadyRetryInterval"`
+	KeyName               string        `yaml:"keyName"`
+	LogDir                string        `yaml:"logDir"`
 
 	// 输出目录：用于保存服务器 IP 列表和脚本运行状态等 JSON 文件
 	OutputDir string `yaml:"outputDir"`

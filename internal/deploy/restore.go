@@ -87,7 +87,7 @@ func sanitizeTargetIPs(targetIPs []string) []string {
 func filterStatusesByIPs(statuses []*ScriptStatus, targetIPs []string) ([]*ScriptStatus, error) {
 	cleanedIPs := sanitizeTargetIPs(targetIPs)
 	if len(cleanedIPs) == 0 {
-		return statuses, nil
+		return filterNonSuccessStatuses(statuses), nil
 	}
 
 	existingIPs := make(map[string]struct{}, len(statuses))
@@ -126,6 +126,20 @@ func filterStatusesByIPs(statuses []*ScriptStatus, targetIPs []string) ([]*Scrip
 	return filtered, nil
 }
 
+func filterNonSuccessStatuses(statuses []*ScriptStatus) []*ScriptStatus {
+	filtered := make([]*ScriptStatus, 0, len(statuses))
+	for _, st := range statuses {
+		if st == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(st.Status), "success") {
+			continue
+		}
+		filtered = append(filtered, st)
+	}
+	return filtered
+}
+
 // Run 启动恢复流程：基于 script_status.json 中的状态，重新在对应机器上执行脚本，并重新开始同步日志与脚本状态。
 func (r *Restorer) Run(ctx context.Context, statuses []*ScriptStatus) error {
 	if r == nil || r.outputMgr == nil {
@@ -135,30 +149,62 @@ func (r *Restorer) Run(ctx context.Context, statuses []*ScriptStatus) error {
 	keyPath := buildSSHKeyPath(r.cfg)
 
 	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		first error
+		mu   sync.Mutex
+		errs []error
 	)
 
+	eligible := make([]ScriptStatus, 0, len(statuses))
 	for _, st := range statuses {
-		// 仅对有 IP 且有 Command 的记录进行恢复；其他记录跳过
 		if st == nil || st.IP == "" || st.Command == "" {
 			continue
 		}
-
-		// 避免 goroutine 闭包捕获共享指针，复制一份
-		stCopy := *st
-
-		wg.Add(1)
-		go func(st ScriptStatus) {
-			defer wg.Done()
-			r.runForStatus(ctx, st, keyPath, &mu, &first)
-		}(stCopy)
+		eligible = append(eligible, *st)
 	}
 
-	wg.Wait()
-	if first != nil {
-		return first
+	addErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		errs = append(errs, err)
+	}
+
+	runWithBatchLimit("restore-run-remote-command", len(eligible), resolveSSHMaxConcurrency(r.cfg), func(i int) {
+		st := eligible[i]
+		name := st.Name
+		if name == "" {
+			name = fmt.Sprintf("%s-%s", st.ServiceType, st.IP)
+		}
+
+		attempts, readyErr := waitSSHReadyWithRetry(
+			ctx,
+			st.IP,
+			r.cfg.SSHUser,
+			keyPath,
+			resolveSSHReadyRetryCount(r.cfg),
+			resolveSSHReadyRetryInterval(r.cfg),
+		)
+		now := time.Now().Unix()
+		if readyErr != nil {
+			addErr(fmt.Errorf("[restore][%s][%s] %w", st.IP, name, readyErr))
+			if persistErr := r.outputMgr.UpdateSSHScriptStatus(st.IP, st.ServiceType, name, "fail", attempts, readyErr.Error(), now); persistErr != nil {
+				addErr(fmt.Errorf("[restore][%s][%s] 写入 ssh_scripts.json 失败: %w", st.IP, name, persistErr))
+			}
+			return
+		}
+		if persistErr := r.outputMgr.UpdateSSHScriptStatus(st.IP, st.ServiceType, name, "success", attempts, "", now); persistErr != nil {
+			addErr(fmt.Errorf("[restore][%s][%s] 写入 ssh_scripts.json 失败: %w", st.IP, name, persistErr))
+			return
+		}
+
+		if err := r.runForStatus(ctx, st, keyPath); err != nil {
+			addErr(err)
+		}
+	})
+
+	if len(errs) > 0 {
+		return deployMultiError{errs: errs}
 	}
 
 	log.Println("👉 [restore] 所有远程命令已启动，开始同步日志与脚本状态...")
@@ -173,7 +219,7 @@ func (r *Restorer) Run(ctx context.Context, statuses []*ScriptStatus) error {
 }
 
 // runForStatus 在单个 ScriptStatus 对应的服务器上重新执行脚本，并更新该条状态。
-func (r *Restorer) runForStatus(ctx context.Context, st ScriptStatus, keyPath string, mu *sync.Mutex, first *error) {
+func (r *Restorer) runForStatus(ctx context.Context, st ScriptStatus, keyPath string) error {
 	name := st.Name
 	if name == "" {
 		name = fmt.Sprintf("%s-%s", st.ServiceType, st.IP)
@@ -207,12 +253,7 @@ func (r *Restorer) runForStatus(ctx context.Context, st ScriptStatus, keyPath st
 		} else {
 			log.Printf("[restore][%s] ssh 命令执行失败（非 ExitError），cmd=%q，err=%v\n", st.IP, fullCmd, err)
 		}
-		mu.Lock()
-		if *first == nil {
-			*first = fmt.Errorf("[restore][%s] 远程命令执行失败: %w", st.IP, err)
-		}
-		mu.Unlock()
-		return
+		return fmt.Errorf("[restore][%s] 远程命令执行失败: %w", st.IP, err)
 	}
 
 	pid, parseErr := parseRemotePID(stdoutBuf.String())
@@ -235,6 +276,7 @@ func (r *Restorer) runForStatus(ctx context.Context, st ScriptStatus, keyPath st
 			s.LogSize = 0
 		},
 	)
+	return nil
 }
 
 // 其余辅助方法见 exec_helpers.go

@@ -65,6 +65,7 @@ func (m *Sync) Run(ctx context.Context) error {
 
 	keyPath := buildSSHKeyPath(m.cfg)
 	statuses := m.outputMgr.SnapshotStatuses()
+	sshSem := make(chan struct{}, resolveSSHMaxConcurrency(m.cfg))
 
 	var (
 		wg    sync.WaitGroup
@@ -83,11 +84,13 @@ func (m *Sync) Run(ctx context.Context) error {
 
 			localLogPath := st.LocalLog
 			if localLogPath == "" {
-				localLogPath = filepath.Join(m.cfg.LogDir, fmt.Sprintf("%s-%s.log", st.IP, st.ServiceType))
+				localLogPath = buildLocalLogPath(m.cfg.LogDir, st.IP, st.Name)
 			}
 
 			// 记录已同步的远端日志大小，用于增量拉取
 			var offset int64 = st.LogSize
+			// 连续拉取远端日志失败次数；达到阈值才判定失败，避免短暂网络抖动导致误判。
+			consecutiveLogFetchFailures := 0
 
 			for {
 				select {
@@ -96,11 +99,47 @@ func (m *Sync) Run(ctx context.Context) error {
 				default:
 				}
 
-				// 1. 从远端增量获取日志并追加到本地
-				logData, newSize, err := m.fetchRemoteLogDelta(ctx, m.cfg.SSHUser, keyPath, st.IP, st.LogPath, offset)
+				// 1. 从远端增量获取日志并追加到本地（受 SSH 并发限制）
+				var (
+					logData []byte
+					newSize int64
+					err     error
+				)
+				err = withSSHToken(ctx, sshSem, st.IP, "fetch-log-delta", func() error {
+					logData, newSize, err = m.fetchRemoteLogDelta(ctx, m.cfg.SSHUser, keyPath, st.IP, st.LogPath, offset)
+					return err
+				})
 				if err != nil {
-					log.Printf("[%s] 获取远端日志失败（%s）: %v\n", st.IP, st.LogPath, err)
+					if ctx.Err() != nil {
+						return
+					}
+					consecutiveLogFetchFailures++
+					log.Printf("[%s] 获取远端日志失败（%s），连续失败 %d/10: %v\n", st.IP, st.LogPath, consecutiveLogFetchFailures, err)
+					log.Printf("[%s] 本轮日志同步完成，result=failed，连续失败=%d/10\n", st.IP, consecutiveLogFetchFailures)
+					if consecutiveLogFetchFailures >= 10 {
+						now := time.Now().Unix()
+						reason := fmt.Sprintf("连续 10 次获取远端日志失败: %v", err)
+						_ = m.outputMgr.UpdateStatus(st.IP, st.ServiceType, func(s *ScriptStatus) {
+							s.Status = "failed"
+							s.Reason = reason
+							s.UpdatedAt = now
+							if s.LocalLog == "" {
+								s.LocalLog = localLogPath
+							}
+							s.LogSize = offset
+						})
+
+						muErr.Lock()
+						if first == nil {
+							first = fmt.Errorf("远端日志同步失败: ip=%s serviceType=%s: %s", st.IP, st.ServiceType, reason)
+						}
+						muErr.Unlock()
+						return
+					}
+					time.Sleep(5 * time.Second)
+					continue
 				} else {
+					consecutiveLogFetchFailures = 0
 					if len(logData) > 0 {
 						if writeErr := appendToFile(localLogPath, logData); writeErr != nil {
 							log.Printf("[%s] 写入本地日志失败 %s: %v\n", st.IP, localLogPath, writeErr)
@@ -109,11 +148,21 @@ func (m *Sync) Run(ctx context.Context) error {
 					}
 				}
 
-				// 2. 检查远端进程是否仍在运行
-				running, checkErr := checkRemoteProcess(ctx, m.cfg.SSHUser, keyPath, st.IP, st.PID)
+				// 2. 检查远端进程是否仍在运行（受 SSH 并发限制）
+				var (
+					running  bool
+					checkErr error
+				)
+				checkErr = withSSHToken(ctx, sshSem, st.IP, "check-remote-process", func() error {
+					running, checkErr = checkRemoteProcess(ctx, m.cfg.SSHUser, keyPath, st.IP, st.PID)
+					return checkErr
+				})
 				now := time.Now().Unix()
 
 				if checkErr != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					log.Printf("[%s] 检查远端进程状态失败(pid=%d): %v\n", st.IP, st.PID, checkErr)
 				}
 
@@ -128,9 +177,20 @@ func (m *Sync) Run(ctx context.Context) error {
 						s.LogSize = offset
 					})
 				} else {
-					// 已结束，为了确保本地日志完整，再做一次兜底的增量拉取
-					finalData, finalSize, finalErr := m.fetchRemoteLogDelta(ctx, m.cfg.SSHUser, keyPath, st.IP, st.LogPath, offset)
+					// 已结束，为了确保本地日志完整，再做一次兜底的增量拉取（受 SSH 并发限制）
+					var (
+						finalData []byte
+						finalSize int64
+						finalErr  error
+					)
+					finalErr = withSSHToken(ctx, sshSem, st.IP, "fetch-log-final", func() error {
+						finalData, finalSize, finalErr = m.fetchRemoteLogDelta(ctx, m.cfg.SSHUser, keyPath, st.IP, st.LogPath, offset)
+						return finalErr
+					})
 					if finalErr != nil {
+						if ctx.Err() != nil {
+							return
+						}
 						log.Printf("[%s] 结束前最后一次获取远端日志失败（%s）: %v\n", st.IP, st.LogPath, finalErr)
 					} else if len(finalData) > 0 {
 						if writeErr := appendToFile(localLogPath, finalData); writeErr != nil {
@@ -171,6 +231,20 @@ func (m *Sync) Run(ctx context.Context) error {
 
 	wg.Wait()
 	return first
+}
+
+func withSSHToken(ctx context.Context, sem chan struct{}, ip, action string, fn func() error) error {
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		log.Printf("[%s] 等待 SSH 并发令牌取消(action=%s): %v\n", ip, action, ctx.Err())
+		return ctx.Err()
+	}
+	defer func() {
+		<-sem
+	}()
+
+	return fn()
 }
 
 // fetchRemoteLogDelta 通过 ssh 从远端增量拉取日志内容。

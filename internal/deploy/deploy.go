@@ -49,10 +49,35 @@ type Deployer struct {
 	l1VaultDeriveRand uint32
 }
 
+const (
+	defaultSSHMaxConcurrency  = 100
+	defaultSSHReadyRetryCount = 3
+	defaultSSHReadyRetryWait  = 5 * time.Second
+)
+
+var waitSSHReadyFunc = sshutil.WaitSSH
+
 // NewDeployer 负责初始化一次部署执行所需的基础依赖（目录/输出管理/AWS client/SSH key 路径）。
 func NewDeployer(ctx context.Context, cfg DeployConfig) (*Deployer, error) {
 	if err := cfg.CheckValid(); err != nil {
 		return nil, err
+	}
+
+	// outputDir 为空时沿用既有默认规则（位于 logDir 下的 output）。
+	if cfg.CommonConfig.OutputDir == "" {
+		cfg.CommonConfig.OutputDir = filepath.Join(cfg.CommonConfig.LogDir, "output")
+	}
+
+	// 0) 预先归档旧 output / logs，且两者共享同一时间戳
+	archiveTS, err := resolveDeployArchiveTimestamp(cfg.CommonConfig.OutputDir, cfg.CommonConfig.LogDir)
+	if err != nil {
+		return nil, fmt.Errorf("计算归档时间戳失败: %w", err)
+	}
+	if _, err := rotateExistingDirWithTimestamp(cfg.CommonConfig.OutputDir, archiveTS); err != nil {
+		return nil, fmt.Errorf("归档旧的输出目录失败: %w", err)
+	}
+	if _, err := rotateExistingDirWithTimestamp(cfg.CommonConfig.LogDir, archiveTS); err != nil {
+		return nil, fmt.Errorf("归档旧的日志目录失败: %w", err)
 	}
 
 	// 1) 准备日志目录
@@ -60,15 +85,7 @@ func NewDeployer(ctx context.Context, cfg DeployConfig) (*Deployer, error) {
 		return nil, fmt.Errorf("创建日志目录失败: %w", err)
 	}
 
-	// 2) 设置并创建输出目录，用于保存 servers.json / script_status.json
-	if cfg.CommonConfig.OutputDir == "" {
-		cfg.CommonConfig.OutputDir = filepath.Join(cfg.CommonConfig.LogDir, "output")
-	}
-
-	// 3) 归档旧 output，避免覆盖上次结果
-	if err := rotateExistingOutputDir(cfg.CommonConfig.OutputDir); err != nil {
-		return nil, fmt.Errorf("归档旧的输出目录失败: %w", err)
-	}
+	// 2) 创建 output 目录，用于保存 servers.json / script_status.json
 	if err := os.MkdirAll(cfg.CommonConfig.OutputDir, 0o755); err != nil {
 		return nil, fmt.Errorf("创建输出目录失败: %w", err)
 	}
@@ -175,7 +192,7 @@ func (d *Deployer) Run() error {
 		}
 
 		log.Printf("👉 [%s] 等待每台机器 SSH 就绪...\n", svc.Type.String())
-		if err := d.waitAllSSHReady(ips); err != nil {
+		if err := d.waitAllSSHReady(ips, svc); err != nil {
 			return err
 		}
 
@@ -292,19 +309,53 @@ func (d *Deployer) getInstancePublicIPs(ids []*string) ([]string, error) {
 	return ips, nil
 }
 
-func (d *Deployer) waitAllSSHReady(ips []string) error {
-	for _, ip := range ips {
-		log.Printf("[%s] 等待 SSH 就绪...\n", ip)
-		if err := sshutil.WaitSSH(d.ctx, ip, d.cfg.CommonConfig.SSHUser, d.sshKeyPath); err != nil {
-			return err
+func (d *Deployer) waitAllSSHReady(ips []string, svc ServiceConfig) error {
+	var (
+		mu   sync.Mutex
+		errs []error
+	)
+
+	addErr := func(ip, name string, err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if name != "" {
+			errs = append(errs, fmt.Errorf("[%s][%s] %w", ip, name, err))
+		} else {
+			errs = append(errs, fmt.Errorf("[%s] %w", ip, err))
 		}
 	}
-	return nil
+
+	runWithBatchLimit("wait-ssh-ready", len(ips), d.sshMaxConcurrency(), func(i int) {
+		ip := ips[i]
+		name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
+		log.Printf("[%s][%s] 等待 SSH 就绪...\n", ip, name)
+
+		attempts, err := d.waitSSHReadyWithRetry(ip)
+		now := time.Now().Unix()
+		if err != nil {
+			addErr(ip, name, err)
+			if persistErr := d.outputMgr.UpdateSSHScriptStatus(ip, svc.Type.String(), name, "fail", attempts, err.Error(), now); persistErr != nil {
+				addErr(ip, name, fmt.Errorf("写入 ssh_scripts.json 失败: %w", persistErr))
+			}
+			return
+		}
+
+		if persistErr := d.outputMgr.UpdateSSHScriptStatus(ip, svc.Type.String(), name, "success", attempts, "", now); persistErr != nil {
+			addErr(ip, name, fmt.Errorf("写入 ssh_scripts.json 失败: %w", persistErr))
+		}
+	})
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return deployMultiError{errs: errs}
 }
 
 func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error {
 	var (
-		wg   sync.WaitGroup
 		mu   sync.Mutex
 		errs []error
 	)
@@ -326,123 +377,215 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 		}
 	}
 
-	for idx, ip := range ips {
-		i := idx // service 内部编号，从 0 开始
-		wg.Add(1)
+	runWithBatchLimit("run-remote-command", len(ips), d.sshMaxConcurrency(), func(idx int) {
+		i := idx
+		ip := ips[idx]
+		name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
+		logPrefix := fmt.Sprintf("[%s][%s]", ip, name)
+		log.Printf("%s 开始部署任务\n", logPrefix)
 
-		go func(i int, ip string) {
-			defer wg.Done()
+		// 再次确认标签（与 shell 版一致，用 ip -> instanceId -> 打 Name 标签）
+		log.Printf("%s STEP1: 查询实例 ID...\n", logPrefix)
+		instID, err := d.findInstanceByIP(ip)
+		if err != nil {
+			addErr(ip, name, err)
+			return
+		}
+		log.Printf("%s STEP1: 查询实例 ID 完成，instanceId=%s\n", logPrefix, instID)
 
-			name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
-			logPrefix := fmt.Sprintf("[%s][%s]", ip, name)
-			log.Printf("%s 开始部署任务\n", logPrefix)
+		log.Printf("%s STEP2: 设置实例 Name 标签...\n", logPrefix)
+		if err := d.tagInstanceName(instID, name); err != nil {
+			addErr(ip, name, err)
+			return
+		}
+		log.Printf("%s STEP2: 设置实例 Name 标签完成\n", logPrefix)
 
-			// 再次确认标签（与 shell 版一致，用 ip -> instanceId -> 打 Name 标签）
-			log.Printf("%s STEP1: 查询实例 ID...\n", logPrefix)
-			instID, err := d.findInstanceByIP(ip)
-			if err != nil {
-				addErr(ip, name, err)
-				return
+		log.Printf("%s STEP3: 生成远端执行命令...\n", logPrefix)
+		cmdStr, err := d.buildRemoteCommandForIndex(ips, i, svc)
+		if err != nil {
+			addErr(ip, name, err)
+			return
+		}
+		log.Printf("%s STEP3: 生成远端执行命令完成\n", logPrefix)
+
+		remoteLogFile, remoteLogDir := buildRemoteLogPath("", name)
+
+		// 在远端后台运行脚本，并将 stdout/stderr 重定向到远端日志文件。
+		// 同时输出子进程 PID，便于后续状态监控。
+		log.Printf("%s STEP4: 构造远端后台运行命令...\n", logPrefix)
+		fullCmd := buildBackgroundCommand(cfg.RunDuration, cmdStr, remoteLogDir, remoteLogFile)
+		log.Printf("%s STEP4: 构造远端后台运行命令完成\n", logPrefix)
+
+		log.Printf("%s run (background): %s\n", logPrefix, fullCmd)
+
+		localLogPath := buildLocalLogPath(cfg.LogDir, ip, name)
+
+		log.Printf("%s STEP5: 通过 ssh 启动远端后台任务...\n", logPrefix)
+		sshCmd := exec.CommandContext(d.ctx, "ssh",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "IdentitiesOnly=yes",
+			"-i", d.sshKeyPath,
+			fmt.Sprintf("%s@%s", cfg.SSHUser, ip),
+			fullCmd,
+		)
+
+		var stdoutBuf bytes.Buffer
+		sshCmd.Stdout = &stdoutBuf
+		sshCmd.Stderr = &stdoutBuf
+
+		if err := sshCmd.Run(); err != nil {
+			// 为了便于排查 ssh 相关问题（如 exit status 255），这里输出更详细的日志。
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				// 注意：stderr 已经重定向到 logFile，这里只打印 exitCode 和命令本身。
+				log.Printf("%s ssh 命令执行失败，exitCode=%d，cmd=%q\n", logPrefix, exitErr.ExitCode(), fullCmd)
+				addErr(ip, name, fmt.Errorf("远程命令执行失败，exitCode=%d: %w", exitErr.ExitCode(), err))
+			} else {
+				log.Printf("%s ssh 命令执行失败（非 ExitError），cmd=%q，err=%v\n", logPrefix, fullCmd, err)
+				addErr(ip, name, fmt.Errorf("远程命令执行失败: %w", err))
 			}
-			log.Printf("%s STEP1: 查询实例 ID 完成，instanceId=%s\n", logPrefix, instID)
+			return
+		}
+		log.Printf("%s STEP5: ssh 启动远端后台任务完成\n", logPrefix)
 
-			log.Printf("%s STEP2: 设置实例 Name 标签...\n", logPrefix)
-			if err := d.tagInstanceName(instID, name); err != nil {
-				addErr(ip, name, err)
-				return
-			}
-			log.Printf("%s STEP2: 设置实例 Name 标签完成\n", logPrefix)
+		// 解析远端返回的 PID，用于后续状态监控
+		log.Printf("%s STEP6: 解析远端 PID...\n", logPrefix)
+		pid, parseErr := parseRemotePID(stdoutBuf.String())
+		if parseErr != nil {
+			// output 为空/非 PID 都属于异常情况：远端未按预期返回 PID，无法进行后续监控，直接判定失败。
+			addErr(ip, name, fmt.Errorf("解析远端 PID 失败: %w，输出: %q", parseErr, stdoutBuf.String()))
+			return
+		}
+		if pid <= 0 {
+			addErr(ip, name, fmt.Errorf("任务执行失败，远端 PID 为 0，远端输出: %q", stdoutBuf.String()))
+			return
+		}
 
-			log.Printf("%s STEP3: 生成远端执行命令...\n", logPrefix)
-			cmdStr, err := d.buildRemoteCommandForIndex(ips, i, svc)
-			if err != nil {
-				addErr(ip, name, err)
-				return
-			}
-			log.Printf("%s STEP3: 生成远端执行命令完成\n", logPrefix)
+		log.Printf("%s STEP6: 解析远端 PID 完成，pid=%d\n", logPrefix, pid)
 
-			remoteLogFile, remoteLogDir := buildRemoteLogPath("", name)
+		// 初始化脚本运行状态
+		log.Printf("%s STEP7: 初始化本地运行状态记录...\n", logPrefix)
+		err = d.outputMgr.InitStatus(
+			ip,
+			svc.Type.String(),
+			name,
+			cmdStr,
+			pid,
+			remoteLogFile,
+			localLogPath,
+			time.Now().Unix(),
+		)
+		if err != nil {
+			addErr(ip, name, err)
+			return
+		}
+		log.Printf("%s STEP7: 初始化本地运行状态记录完成\n", logPrefix)
+		log.Printf("%s 部署任务完成\n", logPrefix)
+	})
 
-			// 在远端后台运行脚本，并将 stdout/stderr 重定向到远端日志文件。
-			// 同时输出子进程 PID，便于后续状态监控。
-			log.Printf("%s STEP4: 构造远端后台运行命令...\n", logPrefix)
-			fullCmd := buildBackgroundCommand(cfg.RunDuration, cmdStr, remoteLogDir, remoteLogFile)
-			log.Printf("%s STEP4: 构造远端后台运行命令完成\n", logPrefix)
-
-			log.Printf("%s run (background): %s\n", logPrefix, fullCmd)
-
-			localLogPath := buildLocalLogPath(cfg.LogDir, ip, name)
-
-			log.Printf("%s STEP5: 通过 ssh 启动远端后台任务...\n", logPrefix)
-			sshCmd := exec.CommandContext(d.ctx, "ssh",
-				"-o", "StrictHostKeyChecking=no",
-				"-o", "IdentitiesOnly=yes",
-				"-i", d.sshKeyPath,
-				fmt.Sprintf("%s@%s", cfg.SSHUser, ip),
-				fullCmd,
-			)
-
-			var stdoutBuf bytes.Buffer
-			sshCmd.Stdout = &stdoutBuf
-			sshCmd.Stderr = &stdoutBuf
-
-			if err := sshCmd.Run(); err != nil {
-				// 为了便于排查 ssh 相关问题（如 exit status 255），这里输出更详细的日志。
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					// 注意：stderr 已经重定向到 logFile，这里只打印 exitCode 和命令本身。
-					log.Printf("%s ssh 命令执行失败，exitCode=%d，cmd=%q\n", logPrefix, exitErr.ExitCode(), fullCmd)
-					addErr(ip, name, fmt.Errorf("远程命令执行失败，exitCode=%d: %w", exitErr.ExitCode(), err))
-				} else {
-					log.Printf("%s ssh 命令执行失败（非 ExitError），cmd=%q，err=%v\n", logPrefix, fullCmd, err)
-					addErr(ip, name, fmt.Errorf("远程命令执行失败: %w", err))
-				}
-				return
-			}
-			log.Printf("%s STEP5: ssh 启动远端后台任务完成\n", logPrefix)
-
-			// 解析远端返回的 PID，用于后续状态监控
-			log.Printf("%s STEP6: 解析远端 PID...\n", logPrefix)
-			pid, parseErr := parseRemotePID(stdoutBuf.String())
-			if parseErr != nil {
-				// output 为空/非 PID 都属于异常情况：远端未按预期返回 PID，无法进行后续监控，直接判定失败。
-				addErr(ip, name, fmt.Errorf("解析远端 PID 失败: %w，输出: %q", parseErr, stdoutBuf.String()))
-				return
-			}
-			if pid <= 0 {
-				addErr(ip, name, fmt.Errorf("任务执行失败，远端 PID 为 0，远端输出: %q", stdoutBuf.String()))
-				return
-			}
-
-			log.Printf("%s STEP6: 解析远端 PID 完成，pid=%d\n", logPrefix, pid)
-
-			// 初始化脚本运行状态
-			log.Printf("%s STEP7: 初始化本地运行状态记录...\n", logPrefix)
-			err = d.outputMgr.InitStatus(
-				ip,
-				svc.Type.String(),
-				name,
-				cmdStr,
-				pid,
-				remoteLogFile,
-				localLogPath,
-				time.Now().Unix(),
-			)
-			if err != nil {
-				addErr(ip, name, err)
-				return
-			}
-			log.Printf("%s STEP7: 初始化本地运行状态记录完成\n", logPrefix)
-			log.Printf("%s 部署任务完成\n", logPrefix)
-		}(i, ip)
-	}
-
-	wg.Wait()
 	if len(errs) == 0 {
 		return nil
 	}
 
 	// 汇总错误：每台机器一条，便于一次性定位问题。
 	return deployMultiError{errs: errs}
+}
+
+func (d *Deployer) waitSSHReadyWithRetry(ip string) (uint, error) {
+	return waitSSHReadyWithRetry(d.ctx, ip, d.cfg.CommonConfig.SSHUser, d.sshKeyPath, d.sshReadyRetryCount(), d.sshReadyRetryInterval())
+}
+
+func (d *Deployer) sshMaxConcurrency() int {
+	return resolveSSHMaxConcurrency(d.cfg.CommonConfig)
+}
+
+func (d *Deployer) sshReadyRetryCount() uint {
+	return resolveSSHReadyRetryCount(d.cfg.CommonConfig)
+}
+
+func (d *Deployer) sshReadyRetryInterval() time.Duration {
+	return resolveSSHReadyRetryInterval(d.cfg.CommonConfig)
+}
+
+func runWithBatchLimit(taskName string, total, batchLimit int, task func(index int)) {
+	if total <= 0 {
+		return
+	}
+	if taskName == "" {
+		taskName = "unnamed-task"
+	}
+	if batchLimit <= 0 {
+		batchLimit = total
+	}
+	totalRounds := (total + batchLimit - 1) / batchLimit
+	for start := 0; start < total; start += batchLimit {
+		end := start + batchLimit
+		if end > total {
+			end = total
+		}
+		round := start/batchLimit + 1
+		log.Printf("🧩 [batch:%s] 第 %d/%d 轮开始，index=[%d,%d]，batchLimit=%d\n", taskName, round, totalRounds, start, end-1, batchLimit)
+
+		var wg sync.WaitGroup
+		for i := start; i < end; i++ {
+			idx := i
+			roundNo := round
+			wg.Add(1)
+			go func(index, currentRound int) {
+				defer wg.Done()
+				globalSeq := index + 1
+				log.Printf("▶️ [batch:%s][round:%d/%d][task:%d/%d] 开始\n", taskName, currentRound, totalRounds, globalSeq, total)
+				defer log.Printf("✅ [batch:%s][round:%d/%d][task:%d/%d] 完成\n", taskName, currentRound, totalRounds, globalSeq, total)
+				task(index)
+			}(idx, roundNo)
+		}
+		wg.Wait()
+	}
+	log.Printf("📦 [batch:%s] 全部完成，共 %d 轮，task=%d\n", taskName, totalRounds, total)
+}
+
+func resolveSSHMaxConcurrency(cfg CommonConfig) int {
+	v := int(cfg.SSHMaxConcurrency)
+	if v <= 0 {
+		return defaultSSHMaxConcurrency
+	}
+	return v
+}
+
+func resolveSSHReadyRetryCount(cfg CommonConfig) uint {
+	if cfg.SSHReadyRetryCount == 0 {
+		return defaultSSHReadyRetryCount
+	}
+	return cfg.SSHReadyRetryCount
+}
+
+func resolveSSHReadyRetryInterval(cfg CommonConfig) time.Duration {
+	if cfg.SSHReadyRetryInterval <= 0 {
+		return defaultSSHReadyRetryWait
+	}
+	return cfg.SSHReadyRetryInterval
+}
+
+func waitSSHReadyWithRetry(ctx context.Context, ip, sshUser, sshKeyPath string, retries uint, interval time.Duration) (uint, error) {
+	totalAttempts := retries + 1
+	var lastErr error
+	for attempt := uint(1); attempt <= totalAttempts; attempt++ {
+		err := waitSSHReadyFunc(ctx, ip, sshUser, sshKeyPath)
+		if err == nil {
+			return attempt, nil
+		}
+		lastErr = err
+		if attempt == totalAttempts {
+			break
+		}
+		log.Printf("[%s] SSH 未就绪，第 %d/%d 次失败，%s 后重试，err=%v\n", ip, attempt, totalAttempts, interval, err)
+		select {
+		case <-ctx.Done():
+			return attempt, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+
+	return totalAttempts, fmt.Errorf("SSH 就绪探测失败（重试 %d 次）: %w", retries, lastErr)
 }
 
 func (d *Deployer) buildInstanceName(tagPrefix, serviceType string, ordinal int) string {
@@ -773,50 +916,85 @@ func parseRemotePID(output string) (int, error) {
 	return 0, fmt.Errorf("无法从输出中解析 PID: %q", output)
 }
 
-// rotateExistingOutputDir 如果指定的 output 目录已存在且非空，则将其重命名为 output-YYYYMMDD-HHMMSS。
-// 时间戳优先使用旧的 script_status.json 的修改时间（近似代表上一次部署结束时间），否则退回当前时间。
-// 用于在每次新的 deploy 前，对上一次的输出做一个简单归档，避免被覆盖。
-func rotateExistingOutputDir(outputDir string) error {
-	if outputDir == "" {
-		return nil
+func resolveDeployArchiveTimestamp(outputDir, logDir string) (string, error) {
+	if outputDir != "" {
+		if info, rotatable, err := dirInfoIfRotatable(outputDir); err != nil {
+			return "", err
+		} else if rotatable {
+			statusPath := filepath.Join(outputDir, "script_status.json")
+			if stInfo, err := os.Stat(statusPath); err == nil {
+				return stInfo.ModTime().Format("20060102-150405"), nil
+			}
+			return info.ModTime().Format("20060102-150405"), nil
+		}
 	}
 
-	info, err := os.Stat(outputDir)
+	if logDir != "" {
+		if info, rotatable, err := dirInfoIfRotatable(logDir); err != nil {
+			return "", err
+		} else if rotatable {
+			return info.ModTime().Format("20060102-150405"), nil
+		}
+	}
+
+	return "", nil
+}
+
+// rotateExistingDirWithTimestamp 如果指定目录已存在且非空，则将其重命名为 <dir>-<ts>。
+// ts 为空时会自动基于目录 mtime 生成时间戳；为避免同秒冲突，目标已存在时会自动追加序号后缀。
+func rotateExistingDirWithTimestamp(dir, ts string) (bool, error) {
+	if dir == "" {
+		return false, nil
+	}
+
+	info, rotatable, err := dirInfoIfRotatable(dir)
+	if err != nil {
+		return false, err
+	}
+	if !rotatable {
+		return false, nil
+	}
+
+	if ts == "" {
+		ts = info.ModTime().Format("20060102-150405")
+	}
+	base := fmt.Sprintf("%s-%s", dir, ts)
+	target := base
+	for i := 1; ; i++ {
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			break
+		} else if err != nil {
+			return false, err
+		}
+		target = fmt.Sprintf("%s-%d", base, i)
+	}
+
+	if err := os.Rename(dir, target); err != nil {
+		return false, err
+	}
+
+	log.Printf("ℹ️ 检测到已有目录 %s，已归档为 %s\n", dir, target)
+	return true, nil
+}
+
+func dirInfoIfRotatable(dir string) (os.FileInfo, bool, error) {
+	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, false, nil
 		}
-		return err
+		return nil, false, err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("outputDir 不是目录: %s", outputDir)
+		return nil, false, fmt.Errorf("路径不是目录: %s", dir)
 	}
 
-	entries, err := os.ReadDir(outputDir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	if len(entries) == 0 {
-		// 空目录，无需归档
-		return nil
+		return info, false, nil
 	}
-
-	// 尝试用 script_status.json 的修改时间作为时间戳（更接近上一次运行的结束时间）
-	var tsTime time.Time
-	statusPath := filepath.Join(outputDir, "script_status.json")
-	if stInfo, err := os.Stat(statusPath); err == nil {
-		tsTime = stInfo.ModTime()
-	} else {
-		// 若不存在 script_status.json，则退回到目录本身的 mtime
-		tsTime = info.ModTime()
-	}
-	ts := tsTime.Format("20060102-150405")
-	newPath := fmt.Sprintf("%s-%s", outputDir, ts)
-
-	if err := os.Rename(outputDir, newPath); err != nil {
-		return fmt.Errorf("重命名输出目录失败: %w", err)
-	}
-
-	log.Printf("ℹ️ 检测到已有输出目录 %s，已归档为 %s\n", outputDir, newPath)
-	return nil
+	return info, true, nil
 }

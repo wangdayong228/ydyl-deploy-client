@@ -32,7 +32,7 @@ func buildBackgroundCommand(runDuration time.Duration, cmd, remoteLogDir, remote
 
 // buildLocalLogPath 构造本地日志文件路径。
 func buildLocalLogPath(logDir, ip, name string) string {
-	return filepath.Join(logDir, fmt.Sprintf("%s-%s.log", ip, name))
+	return filepath.Join(logDir, fmt.Sprintf("%s-%s.log", name, ip))
 }
 
 

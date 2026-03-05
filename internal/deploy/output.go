@@ -35,19 +35,32 @@ type ScriptStatus struct {
 	LogSize int64 `json:"logSize,omitempty"`
 }
 
+// SSHScriptStatus 描述 SSH 就绪探测结果。
+type SSHScriptStatus struct {
+	IP          string `json:"ip"`
+	ServiceType string `json:"serviceType"`
+	Name        string `json:"name,omitempty"`
+	Status      string `json:"status"`              // success / fail
+	Attempts    uint   `json:"attempts,omitempty"`  // 实际尝试次数（含首次）
+	Reason      string `json:"reason,omitempty"`    // 失败原因
+	UpdatedAt   int64  `json:"updatedAt,omitempty"` // 状态最近更新时间（Unix 秒）
+}
+
 // OutputManager 负责维护 servers.json 和 script_status.json 两个输出文件。
 type OutputManager struct {
 	outputDir string
 
-	mu       sync.Mutex
-	servers  []ServerInfo
-	statuses map[string]*ScriptStatus
+	mu         sync.Mutex
+	servers    []ServerInfo
+	statuses   map[string]*ScriptStatus
+	sshScripts map[string]*SSHScriptStatus
 }
 
 func NewOutputManager(outputDir string) *OutputManager {
 	return &OutputManager{
-		outputDir: outputDir,
-		statuses:  make(map[string]*ScriptStatus),
+		outputDir:  outputDir,
+		statuses:   make(map[string]*ScriptStatus),
+		sshScripts: make(map[string]*SSHScriptStatus),
 	}
 }
 
@@ -55,8 +68,9 @@ func NewOutputManager(outputDir string) *OutputManager {
 // 主要用于进程重启后，基于已有状态重新进行日志与脚本状态同步。
 func LoadOutputManager(outputDir string) (*OutputManager, error) {
 	m := &OutputManager{
-		outputDir: outputDir,
-		statuses:  make(map[string]*ScriptStatus),
+		outputDir:  outputDir,
+		statuses:   make(map[string]*ScriptStatus),
+		sshScripts: make(map[string]*SSHScriptStatus),
 	}
 
 	// 尝试加载 servers.json（如果不存在则忽略）
@@ -87,9 +101,49 @@ func LoadOutputManager(outputDir string) (*OutputManager, error) {
 		} else if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("读取 script_status.json 失败: %w", err)
 		}
+
+		// 尝试加载 ssh_scripts.json
+		if data, err := os.ReadFile(filepath.Join(outputDir, "ssh_scripts.json")); err == nil {
+			var list []*SSHScriptStatus
+			if uErr := json.Unmarshal(data, &list); uErr != nil {
+				return nil, fmt.Errorf("解析 ssh_scripts.json 失败: %w", uErr)
+			}
+			for _, st := range list {
+				if st == nil {
+					continue
+				}
+				key := compositeKey(st.IP, st.ServiceType)
+				m.sshScripts[key] = st
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("读取 ssh_scripts.json 失败: %w", err)
+		}
 	}
 
 	return m, nil
+}
+
+// UpdateSSHScriptStatus 更新某台服务器 SSH 就绪探测状态。
+func (m *OutputManager) UpdateSSHScriptStatus(ip, serviceType, name, status string, attempts uint, reason string, updatedAt int64) error {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := compositeKey(ip, serviceType)
+	m.sshScripts[key] = &SSHScriptStatus{
+		IP:          ip,
+		ServiceType: serviceType,
+		Name:        name,
+		Status:      status,
+		Attempts:    attempts,
+		Reason:      reason,
+		UpdatedAt:   updatedAt,
+	}
+
+	return m.saveSSHScriptsLocked()
 }
 
 func compositeKey(ip, serviceType string) string {
@@ -236,5 +290,30 @@ func (m *OutputManager) saveStatusesLocked() error {
 	}
 
 	path := filepath.Join(m.outputDir, "script_status.json")
+	return os.WriteFile(path, data, 0o644)
+}
+
+func (m *OutputManager) saveSSHScriptsLocked() error {
+	if m.outputDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(m.outputDir, 0o755); err != nil {
+		return err
+	}
+
+	list := make([]*SSHScriptStatus, 0, len(m.sshScripts))
+	for _, st := range m.sshScripts {
+		if st == nil {
+			continue
+		}
+		list = append(list, st)
+	}
+
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(m.outputDir, "ssh_scripts.json")
 	return os.WriteFile(path, data, 0o644)
 }
