@@ -220,6 +220,13 @@ func (m *Sync) Run(ctx context.Context) error {
 						}
 						muErr.Unlock()
 					}
+					if status == "success" {
+						name := st.Name
+						if name == "" {
+							name = fmt.Sprintf("%s-%s", st.ServiceType, st.IP)
+						}
+						log.Printf("✅ 链部署成功: serviceType=%s, name=%s, ip=%s\n", st.ServiceType, name, st.IP)
+					}
 
 					return
 				}

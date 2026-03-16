@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,7 @@ const (
 	defaultSSHMaxConcurrency  = 100
 	defaultSSHReadyRetryCount = 3
 	defaultSSHReadyRetryWait  = 5 * time.Second
+	deployRestoreMaxRetries   = 3
 )
 
 var waitSSHReadyFunc = sshutil.WaitSSH
@@ -139,6 +141,91 @@ func Run(ctx context.Context, cfg DeployConfig) error {
 		return err
 	}
 	return d.Run()
+}
+
+// RunWithRestoreRetry 在 deploy 完成后，如果仍存在 failed 节点，则按 deploy-restore 流程最多重试 3 次。
+func RunWithRestoreRetry(ctx context.Context, cfg DeployConfig) error {
+	deployErr := Run(ctx, cfg)
+
+	failedIPs, listErr := listFailedIPsFromOutput(cfg.CommonConfig)
+	if listErr != nil {
+		if deployErr != nil {
+			return fmt.Errorf("deploy 失败且读取失败节点失败: deployErr=%v, listErr=%w", deployErr, listErr)
+		}
+		return listErr
+	}
+
+	// 初次 deploy 无失败节点，直接返回原结果（通常为 nil）。
+	if len(failedIPs) == 0 {
+		return deployErr
+	}
+
+	log.Printf("⚠️ 检测到失败链，共 %d 条，开始按 deploy-restore 流程重试（最多 %d 次）: %s\n", len(failedIPs), deployRestoreMaxRetries, strings.Join(failedIPs, ", "))
+
+	for attempt := 1; attempt <= deployRestoreMaxRetries; attempt++ {
+		log.Printf("🔁 第 %d/%d 次失败链重试，目标 IP: %s\n", attempt, deployRestoreMaxRetries, strings.Join(failedIPs, ", "))
+
+		if err := Restore(ctx, cfg.CommonConfig, failedIPs); err != nil {
+			log.Printf("⚠️ 第 %d 次 deploy-restore 执行返回错误: %v\n", attempt, err)
+		}
+
+		failedIPs, listErr = listFailedIPsFromOutput(cfg.CommonConfig)
+		if listErr != nil {
+			return fmt.Errorf("第 %d 次重试后读取失败节点失败: %w", attempt, listErr)
+		}
+		if len(failedIPs) == 0 {
+			log.Printf("✅ 第 %d 次重试后，所有链均成功\n", attempt)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("deploy 完成后重试 %d 次仍有失败链，共 %d 条: %s", deployRestoreMaxRetries, len(failedIPs), strings.Join(failedIPs, ", "))
+}
+
+func listFailedIPsFromOutput(commonCfg CommonConfig) ([]string, error) {
+	outputDir := commonCfg.OutputDir
+	if outputDir == "" {
+		outputDir = filepath.Join(commonCfg.LogDir, "output")
+	}
+
+	outputMgr, err := LoadOutputManager(outputDir)
+	if err != nil {
+		return nil, fmt.Errorf("加载输出状态失败: %w", err)
+	}
+
+	return selectFailedIPs(outputMgr.SnapshotStatuses()), nil
+}
+
+func selectFailedIPs(statuses []*ScriptStatus) []string {
+	if len(statuses) == 0 {
+		return nil
+	}
+
+	uniq := make(map[string]struct{}, len(statuses))
+	for _, st := range statuses {
+		if st == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(st.Status), "failed") {
+			continue
+		}
+		ip := strings.TrimSpace(st.IP)
+		if ip == "" {
+			continue
+		}
+		uniq[ip] = struct{}{}
+	}
+
+	if len(uniq) == 0 {
+		return nil
+	}
+
+	ips := make([]string, 0, len(uniq))
+	for ip := range uniq {
+		ips = append(ips, ip)
+	}
+	sort.Strings(ips)
+	return ips
 }
 
 func (d *Deployer) Run() error {

@@ -31,7 +31,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	cfg := deploy.LoadConfigFromFile(configPath)
 
-	if err := deploy.Run(ctx, *cfg); err != nil {
+	if err := deploy.RunWithRestoreRetry(ctx, *cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "deploy 失败：", err)
 		return err
 	}

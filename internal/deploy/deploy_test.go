@@ -369,3 +369,55 @@ func TestWaitAllSSHReady_RetryAndPersistFail(t *testing.T) {
 		t.Fatalf("failed status reason should not be empty")
 	}
 }
+
+func TestSelectFailedIPs_MixedStatuses(t *testing.T) {
+	t.Parallel()
+
+	statuses := []*ScriptStatus{
+		{IP: "10.0.0.1", Status: "failed"},
+		{IP: "10.0.0.2", Status: "success"},
+		{IP: "10.0.0.3", Status: "running"},
+		{IP: "10.0.0.4", Status: "unknown"},
+		{IP: "10.0.0.5", Status: "FAILED"},
+	}
+
+	got := selectFailedIPs(statuses)
+	want := []string{"10.0.0.1", "10.0.0.5"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("selectFailedIPs mismatch: got=%v want=%v", got, want)
+	}
+}
+
+func TestSelectFailedIPs_DeduplicateAndIgnoreInvalid(t *testing.T) {
+	t.Parallel()
+
+	statuses := []*ScriptStatus{
+		nil,
+		{IP: "10.0.0.1", Status: "failed"},
+		{IP: "10.0.0.1", Status: "failed"},
+		{IP: " 10.0.0.2 ", Status: " failed "},
+		{IP: "", Status: "failed"},
+		{IP: "10.0.0.3", Status: "success"},
+	}
+
+	got := selectFailedIPs(statuses)
+	want := []string{"10.0.0.1", "10.0.0.2"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("selectFailedIPs mismatch: got=%v want=%v", got, want)
+	}
+}
+
+func TestSelectFailedIPs_NoFailed(t *testing.T) {
+	t.Parallel()
+
+	statuses := []*ScriptStatus{
+		{IP: "10.0.0.1", Status: "success"},
+		{IP: "10.0.0.2", Status: "running"},
+		{IP: "10.0.0.3", Status: "unknown"},
+	}
+
+	got := selectFailedIPs(statuses)
+	if len(got) != 0 {
+		t.Fatalf("selectFailedIPs should be empty, got=%v", got)
+	}
+}
