@@ -64,6 +64,7 @@ type CommonConfig struct {
 	L1RegisterBridgePrivateKey string `yaml:"l1RegisterBridgePrivateKey"`
 	DryRun                     bool   `yaml:"dryRun"`
 	ForceDeployL2Chain         bool   `yaml:"forceDeployL2Chain"`
+	EnableGenAccounts          bool   `yaml:"enableGenAccounts"`
 }
 
 // DeployConfig 描述一次 deploy 命令所需的全部参数

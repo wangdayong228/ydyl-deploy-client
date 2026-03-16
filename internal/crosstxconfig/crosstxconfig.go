@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/tyler-smith/go-bip39"
 
@@ -90,6 +91,8 @@ type GenerateResult struct {
 	JobsCount int
 }
 
+const fetchRetryAttempts = 3
+
 func Generate(ctx context.Context, p GenerateParams) (*GenerateResult, error) {
 	return GenerateWithFetcher(ctx, p, SDKFetcher{})
 }
@@ -139,14 +142,9 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	}
 	sort.Strings(chainKeys)
 
-	infos := make(map[string]*ChainInfo, len(chainKeys))
-	for _, key := range chainKeys {
-		entry := chainEntries[key]
-		info, err := fetcher.Fetch(ctx, entry.ServiceType, entry.IP)
-		if err != nil {
-			return nil, err
-		}
-		infos[key] = info
+	infos, err := fetchInfosConcurrentlyWithRetry(ctx, fetcher, chainKeys, chainEntries)
+	if err != nil {
+		return nil, err
 	}
 
 	jobs, err := GenerateJobs(chainKeys, infos, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver)
@@ -162,6 +160,82 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		Chains:    chainKeys,
 		JobsCount: len(jobs),
 	}, nil
+}
+
+type fetchInfoResult struct {
+	key  string
+	info *ChainInfo
+	err  error
+}
+
+func fetchInfosConcurrentlyWithRetry(
+	ctx context.Context,
+	fetcher Fetcher,
+	chainKeys []string,
+	chainEntries map[string]deploy.ServerInfo,
+) (map[string]*ChainInfo, error) {
+	infos := make(map[string]*ChainInfo, len(chainKeys))
+	results := make(chan fetchInfoResult, len(chainKeys))
+
+	fetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for _, key := range chainKeys {
+		entry := chainEntries[key]
+		wg.Add(1)
+		go func(chainKey string, serverEntry deploy.ServerInfo) {
+			defer wg.Done()
+			info, err := fetchWithRetry(fetchCtx, fetcher, serverEntry.ServiceType, serverEntry.IP, fetchRetryAttempts)
+			results <- fetchInfoResult{
+				key:  chainKey,
+				info: info,
+				err:  err,
+			}
+		}(key, entry)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var firstErr error
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+				cancel()
+			}
+			continue
+		}
+		infos[result.key] = result.info
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return infos, nil
+}
+
+func fetchWithRetry(ctx context.Context, fetcher Fetcher, chainType, ip string, attempts int) (*ChainInfo, error) {
+	if attempts <= 0 {
+		return nil, fmt.Errorf("重试次数必须 > 0")
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("拉取链配置被取消: chainType=%s ip=%s: %w", chainType, ip, err)
+		}
+
+		info, err := fetcher.Fetch(ctx, chainType, ip)
+		if err == nil {
+			return info, nil
+		}
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("拉取链配置失败: chainType=%s ip=%s attempts=%d: %w", chainType, ip, attempts, lastErr)
 }
 
 func LoadServers(path string) ([]deploy.ServerInfo, error) {

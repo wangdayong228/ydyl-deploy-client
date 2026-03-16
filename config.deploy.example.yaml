@@ -25,6 +25,7 @@ l1BridgeHubContract: 0x7aC81f608D15819148317EeAD3169734664205Bb
 l1RegisterBridgePrivateKey: 0xa3d9e98f0ba98960bf3755b7519d18b2250b0b8be5e38d5483dcfa3875df2d6f # 0xef431755Bb97ed53874E3e27cAD2cD3399558e25
 dryRun: false
 forceDeployL2Chain: false
+enableGenAccounts: false
 
 # services 为一个数组，每个元素表示一种 service 类型及其数量和命令
 services:
