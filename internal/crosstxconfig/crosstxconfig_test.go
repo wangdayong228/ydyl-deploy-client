@@ -217,12 +217,64 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, source.Contracts.L2BridgeSendContract.Hex(), j.SourceL2Bridge)
 		require.Equal(t, target.Summary.L2_COUNTER_CONTRACT.Hex(), j.TargetL2Contract)
 		require.Equal(t, l1BridgeReceiver, j.L1BridgeReceiver)
+		if j.SourceL2ChainType == "xjst" {
+			require.False(t, j.WaitForReceipts)
+		} else {
+			require.True(t, j.WaitForReceipts)
+		}
 		require.Equal(t, replaceLocalhostWithIP(source.Summary.L2_RPC_URL, source.IP), j.SourceL2RPC)
 		require.Equal(t, replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP), j.TargetL2RPC)
 		require.Equal(t, target.Contracts.L2BridgeReceiveContract.Hex(), j.TargetL2Bridge)
 		require.Equal(t, source.Summary.L2_PRIVATE_KEY.Hex(), j.SourceL2BalanceSenderPrivatekey)
 	}
 	require.Len(t, seenSources, len(chainTypes))
+}
+
+func TestGenerateJobs_WaitForReceipts_BySourceChainType(t *testing.T) {
+	chainTypes := []string{"op", "xjst"}
+	infos := map[string]*ChainInfo{
+		"op": {
+			Type: "op",
+			IP:   "1.1.1.1",
+			Summary: &ydylconsolesdk.SummaryResultResponse{
+				L2_RPC_URL:          "https://op.l2/rpc",
+				L2_PRIVATE_KEY:      common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111"),
+				L2_COUNTER_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000a1"),
+			},
+			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
+				L1BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000e1"),
+				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c1"),
+				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c1"),
+				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d1"),
+			},
+		},
+		"xjst": {
+			Type: "xjst",
+			IP:   "3.3.3.3",
+			Summary: &ydylconsolesdk.SummaryResultResponse{
+				L2_RPC_URL:          "http://xjst.l2/rpc",
+				L2_PRIVATE_KEY:      common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333"),
+				L2_COUNTER_CONTRACT: common.HexToAddress("0x00000000000000000000000000000000000000a3"),
+			},
+			Contracts: &ydylconsolesdk.NodeDeploymentContractsResponse{
+				L1BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000e3"),
+				L2BridgeSendContract:    common.HexToAddress("0x00000000000000000000000000000000000000c3"),
+				L2BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000c3"),
+				L1BridgeReceiveContract: common.HexToAddress("0x00000000000000000000000000000000000000d3"),
+			},
+		},
+	}
+
+	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff")
+	require.NoError(t, err)
+	require.Len(t, jobs, 2)
+
+	got := make(map[string]bool, len(jobs))
+	for _, j := range jobs {
+		got[j.SourceL2ChainType] = j.WaitForReceipts
+	}
+	require.Equal(t, true, got["op"])
+	require.Equal(t, false, got["xjst"])
 }
 
 func TestReplaceLocalhostWithIP_RewriteRules(t *testing.T) {

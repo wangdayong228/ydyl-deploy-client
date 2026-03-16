@@ -35,9 +35,10 @@ type Job struct {
 	TargetL2ChainType               string `json:"target_l2_chain_type"`
 	SourceL2BalanceSenderPrivatekey string `json:"source_l2_balance_sender_privatekey,omitempty"`
 
-	TargetL2RPC    string `json:"target_l2_rpc"`
-	TargetL2Bridge string `json:"target_l2_bridge"`
-	BlockRange     int64  `json:"block_range"`
+	TargetL2RPC     string `json:"target_l2_rpc"`
+	TargetL2Bridge  string `json:"target_l2_bridge"`
+	BlockRange      int64  `json:"block_range"`
+	WaitForReceipts bool   `json:"wait_for_receipts"`
 }
 
 type ChainInfo struct {
@@ -389,9 +390,10 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 			TargetL2ChainType:               target.Type,
 			SourceL2BalanceSenderPrivatekey: source.Summary.L2_PRIVATE_KEY.Hex(),
 
-			TargetL2RPC:    replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP),
-			TargetL2Bridge: target.Contracts.L2BridgeReceiveContract.Hex(),
-			BlockRange:     blockRange,
+			TargetL2RPC:     replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP),
+			TargetL2Bridge:  target.Contracts.L2BridgeReceiveContract.Hex(),
+			BlockRange:      blockRange,
+			WaitForReceipts: source.Type != "xjst",
 		}
 
 		if target.Type == "xjst" {
