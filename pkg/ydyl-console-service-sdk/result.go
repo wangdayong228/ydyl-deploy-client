@@ -23,6 +23,14 @@ func (r Result) GetDeployPipelineProgress(ctx context.Context) (*PipeProgressRes
 	return &out, nil
 }
 
+func (r Result) GetGenAccSummary(ctx context.Context) (*GenAccSummaryResponse, error) {
+	var out GenAccSummaryResponse
+	if err := r.http.get(ctx, "/v1/result/gen-acc/summary", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (r Result) GetNodeDeploymentContracts(ctx context.Context) (*NodeDeploymentContractsResponse, error) {
 	var out NodeDeploymentContractsResponse
 	if err := r.http.get(ctx, "/v1/result/node-deployment-contracts", &out); err != nil {
@@ -54,4 +62,3 @@ func (r Result) GetXjstNodeDeploymentContracts(ctx context.Context) (*XjstNodeDe
 	}
 	return &out, nil
 }
-

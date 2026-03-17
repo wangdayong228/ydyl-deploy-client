@@ -57,6 +57,15 @@ type NodeDeploymentContractsResponse struct {
 	L2BridgeReceiveContract common.Address
 }
 
+type GenAccSummaryResponse struct {
+	TotalTxSentCount int `json:"totalTxSentCount"`
+	AccountGenerated int `json:"accountGenerated"`
+	AccountRemains   int `json:"accountRemains"`
+	Processing       int `json:"processing"`
+	Success          int `json:"success"`
+	Fail             int `json:"fail"`
+}
+
 type OpNodeDeploymentContracts struct {
 	L2CrossDomainMessenger       common.Address
 	L1CrossDomainMessengerProxy  common.Address
