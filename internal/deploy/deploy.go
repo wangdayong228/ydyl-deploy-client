@@ -247,7 +247,8 @@ func (d *Deployer) Run() error {
 		}
 
 		log.Printf("👉 [%s] 正在启动 %d 台 EC2 实例...\n", svc.Type.String(), svc.Count)
-		instanceIDs, err := d.runInstances(svc)
+		launcher := NewEC2RunInstancesLauncher(d.ctx, d.ec2Client, d.cfg.CommonConfig, d.buildInstanceName)
+		instanceIDs, err := launcher.Run(svc)
 		if err != nil {
 			return err
 		}
@@ -299,68 +300,6 @@ func (d *Deployer) Run() error {
 
 	log.Println("✅ 所有 service 执行完成！")
 	return nil
-}
-
-func (d *Deployer) runInstances(svc ServiceConfig) ([]*string, error) {
-	cfg := d.cfg
-	ec2Client := d.ec2Client
-
-	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(svc.AMI),
-		InstanceType: aws.String(svc.InstanceType),
-		MinCount:     aws.Int64(int64(svc.Count)),
-		MaxCount:     aws.Int64(int64(svc.Count)),
-		KeyName:      aws.String(cfg.CommonConfig.KeyName),
-		SecurityGroupIds: []*string{
-			aws.String(cfg.CommonConfig.SecurityGroupID),
-		},
-		InstanceInitiatedShutdownBehavior: aws.String("terminate"),
-		TagSpecifications:                 []*ec2.TagSpecification{},
-	}
-
-	// 如果在 CommonConfig 中配置了磁盘大小，则为所有实例设置统一的根盘大小
-	if cfg.CommonConfig.DiskSizeGiB > 0 {
-		input.BlockDeviceMappings = []*ec2.BlockDeviceMapping{
-			{
-				// 大多数 Ubuntu / Amazon Linux AMI 的根盘设备名为 /dev/xvda，如不符合可改为对应值
-				DeviceName: aws.String("/dev/sda1"),
-				Ebs: &ec2.EbsBlockDevice{
-					VolumeSize:          aws.Int64(cfg.CommonConfig.DiskSizeGiB),
-					VolumeType:          aws.String("gp3"),
-					DeleteOnTermination: aws.Bool(true),
-				},
-			},
-		}
-	}
-
-	out, err := ec2Client.RunInstancesWithContext(d.ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("启动实例失败: %w", err)
-	}
-
-	ids := make([]*string, 0, len(out.Instances))
-	for _, inst := range out.Instances {
-		ids = append(ids, inst.InstanceId)
-	}
-
-	// 逐台实例追加/覆盖 Name 标签为 TAG-<service>-1...TAG-<service>-N
-	for i, id := range ids {
-		name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
-		_, err := ec2Client.CreateTagsWithContext(d.ctx, &ec2.CreateTagsInput{
-			Resources: []*string{id},
-			Tags: []*ec2.Tag{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String(name),
-				},
-			},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("为实例 %s 打标签失败: %w", aws.StringValue(id), err)
-		}
-	}
-
-	return ids, nil
 }
 
 func (d *Deployer) waitInstancesRunning(ids []*string) error {

@@ -2,6 +2,8 @@ package deploy
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nft-rainbow/rainbow-goutils/utils/configutils"
@@ -13,8 +15,8 @@ import (
 type ServiceConfig struct {
 	Type enums.ServiceType `yaml:"type"`
 
-	AMI          string `yaml:"ami"`
-	InstanceType string `yaml:"instanceType"`
+	AMI          string   `yaml:"ami"`
+	InstanceType []string `yaml:"instanceType"`
 
 	TagPrefix string `yaml:"tagPrefix"`
 
@@ -26,6 +28,14 @@ type ServiceConfig struct {
 }
 
 func (s *ServiceConfig) CheckValid() error {
+	if len(s.InstanceType) == 0 {
+		return errors.New("instanceType must contain at least one instance type")
+	}
+	for i, t := range s.InstanceType {
+		if strings.TrimSpace(t) == "" {
+			return fmt.Errorf("instanceType[%d] must not be empty", i)
+		}
+	}
 	if s.Type == enums.ServiceTypeXJST && s.Count%4 != 0 {
 		return errors.New("xjst service count must be divisible by 4")
 	}
