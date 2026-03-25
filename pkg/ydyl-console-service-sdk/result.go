@@ -9,7 +9,7 @@ type Result struct {
 
 func (r Result) GetDeploySummary(ctx context.Context) (*SummaryResultResponse, error) {
 	var out SummaryResultResponse
-	if err := r.http.get(ctx, "/v1/result/summary", &out); err != nil {
+	if err := r.http.get(ctx, "/v1/result/pipeline/summary", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -17,7 +17,7 @@ func (r Result) GetDeploySummary(ctx context.Context) (*SummaryResultResponse, e
 
 func (r Result) GetDeployPipelineProgress(ctx context.Context) (*PipeProgressResponse, error) {
 	var out PipeProgressResponse
-	if err := r.http.get(ctx, "/v1/result/pipeline-progress", &out); err != nil {
+	if err := r.http.get(ctx, "/v1/result/pipeline/progress", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
