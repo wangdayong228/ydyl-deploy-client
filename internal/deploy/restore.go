@@ -47,7 +47,8 @@ func Restore(ctx context.Context, commonCfg CommonConfig, targetIPs []string) er
 		return fmt.Errorf("加载输出状态失败: %w", err)
 	}
 
-	// 优先从 script_status.json 中恢复服务器列表与命令（它记录了真实运行过的任务）。
+	// 从 script_status.json 中恢复服务器列表与命令。
+	// 这里会恢复所有非 success 任务：failed / pending / unknown 等。
 	statuses := outputMgr.SnapshotStatuses()
 	if len(statuses) == 0 {
 		return fmt.Errorf("在输出目录 %s 中未找到任何脚本状态信息（script_status.json 为空或不存在）", commonCfg.OutputDir)
@@ -57,6 +58,7 @@ func Restore(ctx context.Context, commonCfg CommonConfig, targetIPs []string) er
 	if err != nil {
 		return err
 	}
+	log.Printf("👉 [restore] 待恢复候选任务数: %d\n", len(filteredStatuses))
 
 	restorer := NewRestorer(commonCfg, outputMgr)
 	return restorer.Run(ctx, filteredStatuses)
@@ -130,6 +132,9 @@ func filterNonSuccessStatuses(statuses []*ScriptStatus) []*ScriptStatus {
 	filtered := make([]*ScriptStatus, 0, len(statuses))
 	for _, st := range statuses {
 		if st == nil {
+			continue
+		}
+		if strings.TrimSpace(st.Command) == "" {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(st.Status), "success") {

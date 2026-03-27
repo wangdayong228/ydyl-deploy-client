@@ -206,6 +206,39 @@ func (m *OutputManager) InitStatus(ip, serviceType, name, cmd string, pid int, l
 	return m.saveStatusesLocked()
 }
 
+// UpsertPlannedStatus 预写入一条“待执行”的脚本状态。
+// 用于在真正 SSH 启动远端命令之前落盘 command，避免后续恢复时遗漏未启动任务。
+func (m *OutputManager) UpsertPlannedStatus(ip, serviceType, name, cmd, logPath, localLog string, updatedAt int64) error {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := compositeKey(ip, serviceType)
+	st, ok := m.statuses[key]
+	if !ok || st == nil {
+		st = &ScriptStatus{
+			IP:          ip,
+			ServiceType: serviceType,
+		}
+		m.statuses[key] = st
+	}
+
+	st.Name = name
+	st.Command = cmd
+	st.PID = 0
+	st.Status = "pending"
+	st.Reason = ""
+	st.LogPath = logPath
+	st.LocalLog = localLog
+	st.UpdatedAt = updatedAt
+	st.LogSize = 0
+
+	return m.saveStatusesLocked()
+}
+
 // UpdateStatus 更新某台服务器脚本的状态信息。
 func (m *OutputManager) UpdateStatus(ip, serviceType string, updateFn func(*ScriptStatus)) error {
 	if m == nil {

@@ -279,6 +279,11 @@ func (d *Deployer) Run() error {
 			log.Printf("写入服务器列表失败: %v\n", err)
 		}
 
+		log.Printf("👉 [%s] 预登记脚本状态（pending，可用于后续 restore）...\n", svc.Type.String())
+		if err := d.preRegisterStatuses(ips, svc); err != nil {
+			return err
+		}
+
 		log.Printf("👉 [%s] 等待每台机器 SSH 就绪...\n", svc.Type.String())
 		if err := d.waitAllSSHReady(ips, svc); err != nil {
 			return err
@@ -520,6 +525,57 @@ func (d *Deployer) waitSSHReadyWithRetry(ip string) (uint, error) {
 	return waitSSHReadyWithRetry(d.ctx, ip, d.cfg.CommonConfig.SSHUser, d.sshKeyPath, d.sshReadyRetryCount(), d.sshReadyRetryInterval())
 }
 
+func (d *Deployer) preRegisterStatuses(ips []string, svc ServiceConfig) error {
+	var (
+		mu   sync.Mutex
+		errs []error
+	)
+
+	addErr := func(ip, name string, err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if name != "" {
+			errs = append(errs, fmt.Errorf("[%s][%s] %w", ip, name, err))
+		} else {
+			errs = append(errs, fmt.Errorf("[%s] %w", ip, err))
+		}
+	}
+
+	runWithBatchLimit("preregister-script-status", len(ips), d.sshMaxConcurrency(), func(idx int) {
+		i := idx
+		ip := ips[idx]
+		name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
+
+		cmdStr, err := d.buildRemoteCommandForIndex(ips, i, svc)
+		if err != nil {
+			addErr(ip, name, err)
+			return
+		}
+
+		remoteLogFile, _ := buildRemoteLogPath("", name)
+		localLogPath := buildLocalLogPath(d.cfg.CommonConfig.LogDir, ip, name)
+		if err := d.outputMgr.UpsertPlannedStatus(
+			ip,
+			svc.Type.String(),
+			name,
+			cmdStr,
+			remoteLogFile,
+			localLogPath,
+			time.Now().Unix(),
+		); err != nil {
+			addErr(ip, name, fmt.Errorf("预登记 script_status 失败: %w", err))
+		}
+	})
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return deployMultiError{errs: errs}
+}
+
 func (d *Deployer) sshMaxConcurrency() int {
 	return resolveSSHMaxConcurrency(d.cfg.CommonConfig)
 }
@@ -740,7 +796,7 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 		nodeId := i%4 + 1
 
 		return fmt.Sprintf(
-			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && CHAIN_NODE_IPS='%s' NODE_ID='node-%d' GROUP_ID=%d L1_RPC_URL_WS='%s' L1_RPC_URL='%s' AUTO_DEPLOY_L1_CONTRACTS='false' L2_CHAIN_ID=0 L1_CHAIN_ID=%v L1_VAULT_PRIVATE_KEY='%s' L1_BRIDGE_HUB_CONTRACT='%s' L1_REGISTER_BRIDGE_PRIVATE_KEY='%s' ENABLE_GEN_ACC='%t' ./xjst_pipe.sh",
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && CHAIN_NODE_IPS='%s' NODE_ID='node-%d' GROUP_ID=%d L1_RPC_URL_WS='%s' L1_RPC_URL='%s' AUTO_DEPLOY_L1_CONTRACTS='false' L2_CHAIN_ID=0 L1_CHAIN_ID=%v L1_VAULT_PRIVATE_KEY='%s' L1_BRIDGE_HUB_CONTRACT='%s' L1_REGISTER_BRIDGE_PRIVATE_KEY='%s' ENABLE_GEN_ACC='%t' BRIDGE_GAS_PRICE=100000000000 ./xjst_pipe.sh",
 			groupIpsStr, nodeId, groupId, l1RpcUrlWs, l1RpcUrl, common.L1ChainId, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.EnableGenAccounts,
 		), nil
 

@@ -421,3 +421,56 @@ func TestSelectFailedIPs_NoFailed(t *testing.T) {
 		t.Fatalf("selectFailedIPs should be empty, got=%v", got)
 	}
 }
+
+func TestIsExpectedShutdownDisconnect(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		runErr error
+		output string
+		want   bool
+	}{
+		{
+			name:   "closed by remote host should be treated as success",
+			runErr: errors.New("exit status 255"),
+			output: "Connection to 44.250.164.163 closed by remote host.",
+			want:   true,
+		},
+		{
+			name:   "generic connection closed should be treated as success",
+			runErr: errors.New("exit status 255"),
+			output: "Connection to 10.0.0.1 closed.",
+			want:   true,
+		},
+		{
+			name:   "sudo password required should be failed",
+			runErr: errors.New("exit status 1"),
+			output: "sudo: a password is required",
+			want:   false,
+		},
+		{
+			name:   "empty output should be failed",
+			runErr: errors.New("exit status 255"),
+			output: "",
+			want:   false,
+		},
+		{
+			name:   "no error should be false",
+			runErr: nil,
+			output: "Connection to 10.0.0.1 closed by remote host.",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := isExpectedShutdownDisconnect(tt.runErr, tt.output)
+			if got != tt.want {
+				t.Fatalf("isExpectedShutdownDisconnect()=%v want=%v, output=%q", got, tt.want, tt.output)
+			}
+		})
+	}
+}

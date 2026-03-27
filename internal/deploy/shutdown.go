@@ -60,6 +60,10 @@ func Shutdown(ctx context.Context, commonCfg CommonConfig, serversPath string) e
 		output, runErr := runShutdownSSHCommandFunc(ctx, sshUser, sshKeyPath, ip)
 		if runErr != nil {
 			msg := strings.TrimSpace(output)
+			if isExpectedShutdownDisconnect(runErr, msg) {
+				log.Printf("[shutdown][%s] 连接被远端主动断开，视为关机命令已生效\n", ip)
+				return
+			}
 			if msg != "" {
 				addErr(fmt.Errorf("[%s] 关机命令执行失败: %w，输出: %s", ip, runErr, msg))
 				return
@@ -122,4 +126,16 @@ func runShutdownSSHCommand(ctx context.Context, sshUser, sshKeyPath, ip string) 
 
 	err := sshCmd.Run()
 	return stdoutBuf.String(), err
+}
+
+func isExpectedShutdownDisconnect(runErr error, output string) bool {
+	if runErr == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(output))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "closed by remote host") ||
+		strings.Contains(msg, "connection to ") && strings.Contains(msg, " closed")
 }
