@@ -27,7 +27,7 @@ func WaitSSH(ctx context.Context, ip, sshUser, sshKeyPath string) error {
 	defer fmt.Println()
 
 	const (
-		maxRetry        = 60
+		maxRetry        = 3
 		retryInterval   = 3 * time.Second
 		singleTimeout   = 10 * time.Second
 		sshBinary       = "ssh"
@@ -79,4 +79,3 @@ func WaitSSH(ctx context.Context, ip, sshUser, sshKeyPath string) error {
 
 	return fmt.Errorf("[%s] SSH 一直未就绪", ip)
 }
-
