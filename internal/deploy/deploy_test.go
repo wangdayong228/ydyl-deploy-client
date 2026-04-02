@@ -218,6 +218,31 @@ func TestRotateExistingDirWithTimestamp_SkipsEmptyAndMissing(t *testing.T) {
 	}
 }
 
+func TestOutputManagerAddAllIPs_WriteAndDeduplicate(t *testing.T) {
+	t.Parallel()
+
+	outputDir := t.TempDir()
+	mgr := NewOutputManager(outputDir)
+
+	if err := mgr.AddAllIPs([]string{"1.1.1.1", "2.2.2.2", "1.1.1.1", " 2.2.2.2 ", ""}); err != nil {
+		t.Fatalf("AddAllIPs failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outputDir, "all_ips.json"))
+	if err != nil {
+		t.Fatalf("read all_ips.json failed: %v", err)
+	}
+
+	var ips []string
+	if err := json.Unmarshal(data, &ips); err != nil {
+		t.Fatalf("unmarshal all_ips.json failed: %v", err)
+	}
+
+	if strings.Join(ips, ",") != "1.1.1.1,2.2.2.2" {
+		t.Fatalf("unexpected all_ips.json content: %v", ips)
+	}
+}
+
 func TestBuildLocalLogPath_NameFirstThenIP(t *testing.T) {
 	t.Parallel()
 
@@ -309,9 +334,15 @@ func TestWaitAllSSHReady_RetryAndPersistFail(t *testing.T) {
 		return errors.New("ssh not ready")
 	}
 
-	err := d.waitAllSSHReady([]string{"1.1.1.1", "2.2.2.2"}, svc)
-	if err == nil {
-		t.Fatalf("waitAllSSHReady should return error when one host keeps failing")
+	successIPs, failedIPs, err := d.waitAllSSHReady([]string{"1.1.1.1", "2.2.2.2"}, svc)
+	if err != nil {
+		t.Fatalf("waitAllSSHReady returned error: %v", err)
+	}
+	if strings.Join(successIPs, ",") != "1.1.1.1" {
+		t.Fatalf("unexpected success ips: %v", successIPs)
+	}
+	if strings.Join(failedIPs, ",") != "2.2.2.2" {
+		t.Fatalf("unexpected failed ips: %v", failedIPs)
 	}
 
 	mu.Lock()
@@ -348,6 +379,9 @@ func TestWaitAllSSHReady_RetryAndPersistFail(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing success host status")
 	}
+	if successSt.Name != "" {
+		t.Fatalf("ssh stage should not build name, got=%q", successSt.Name)
+	}
 	if successSt.Status != "success" {
 		t.Fatalf("unexpected success status: %s", successSt.Status)
 	}
@@ -362,11 +396,95 @@ func TestWaitAllSSHReady_RetryAndPersistFail(t *testing.T) {
 	if failSt.Status != "fail" {
 		t.Fatalf("unexpected failed status: %s", failSt.Status)
 	}
+	if failSt.Name != "" {
+		t.Fatalf("ssh stage should not build name, got=%q", failSt.Name)
+	}
 	if failSt.Attempts != 4 {
 		t.Fatalf("unexpected failed attempts: got=%d want=4", failSt.Attempts)
 	}
 	if failSt.Reason == "" {
 		t.Fatalf("failed status reason should not be empty")
+	}
+}
+
+func TestAcquireSSHReadyIPsWithProvider_RelaunchByFailedCount(t *testing.T) {
+	t.Parallel()
+
+	d := &Deployer{}
+	svc := ServiceConfig{
+		Type:      enums.ServiceTypeOP,
+		TagPrefix: "ydyl",
+		Count:     3,
+	}
+
+	var needs []int
+	readyIPs, err := d.acquireSSHReadyIPsWithProvider(svc, 3, 3, func(need int, round int, _ ServiceConfig) ([]string, []string, error) {
+		needs = append(needs, need)
+		switch round {
+		case 1:
+			// 首轮 3 台中 1 台 SSH 失败，下一轮应补 1 台
+			return []string{"10.0.0.1", "10.0.0.2"}, []string{"10.0.0.3"}, nil
+		case 2:
+			return []string{"10.0.0.4"}, nil, nil
+		default:
+			return nil, nil, errors.New("unexpected round")
+		}
+	})
+	if err != nil {
+		t.Fatalf("acquireSSHReadyIPsWithProvider returned error: %v", err)
+	}
+	if strings.Join(readyIPs, ",") != "10.0.0.1,10.0.0.2,10.0.0.4" {
+		t.Fatalf("unexpected ready ips: %v", readyIPs)
+	}
+	if strings.Join([]string{fmt.Sprintf("%d", needs[0]), fmt.Sprintf("%d", needs[1])}, ",") != "3,1" {
+		t.Fatalf("unexpected relaunch needs: %v", needs)
+	}
+}
+
+func TestAcquireSSHReadyIPsWithProvider_InsufficientReadyShouldFail(t *testing.T) {
+	t.Parallel()
+
+	d := &Deployer{}
+	svc := ServiceConfig{
+		Type:      enums.ServiceTypeOP,
+		TagPrefix: "ydyl",
+		Count:     2,
+	}
+
+	_, err := d.acquireSSHReadyIPsWithProvider(svc, 2, 2, func(_ int, _ int, _ ServiceConfig) ([]string, []string, error) {
+		return nil, []string{"10.0.0.9"}, nil
+	})
+	if err == nil {
+		t.Fatalf("expected insufficient ready error")
+	}
+	if !strings.Contains(err.Error(), "SSH 可用机器不足") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestServiceConfigCheckValid_XJSTCountStillMustDivisibleBy4(t *testing.T) {
+	t.Parallel()
+
+	valid := ServiceConfig{
+		Type:         enums.ServiceTypeXJST,
+		InstanceType: []string{"t3.medium"},
+		Count:        4,
+	}
+	if err := valid.CheckValid(); err != nil {
+		t.Fatalf("valid xjst service should pass, err=%v", err)
+	}
+
+	invalid := ServiceConfig{
+		Type:         enums.ServiceTypeXJST,
+		InstanceType: []string{"t3.medium"},
+		Count:        6,
+	}
+	err := invalid.CheckValid()
+	if err == nil {
+		t.Fatalf("expected divisible-by-4 validation error")
+	}
+	if !strings.Contains(err.Error(), "divisible by 4") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

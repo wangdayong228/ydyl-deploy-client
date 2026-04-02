@@ -55,6 +55,7 @@ const (
 	defaultSSHReadyRetryCount = 3
 	defaultSSHReadyRetryWait  = 5 * time.Second
 	deployRestoreMaxRetries   = 3
+	defaultSSHAcquireMaxRound = 1
 )
 
 var waitSSHReadyFunc = sshutil.WaitSSH
@@ -245,52 +246,7 @@ func (d *Deployer) Run() error {
 		if svc.Count <= 0 {
 			continue
 		}
-
-		log.Printf("👉 [%s] 正在启动 %d 台 EC2 实例...\n", svc.Type.String(), svc.Count)
-		launcher := NewEC2RunInstancesLauncher(d.ctx, d.ec2Client, d.cfg.CommonConfig, d.buildInstanceName)
-		instanceIDs, err := launcher.Run(svc)
-		if err != nil {
-			return err
-		}
-		log.Printf("[%s] 实例 ID: %v\n", svc.Type.String(), instanceIDs)
-
-		log.Printf("👉 [%s] 等待实例进入 running 状态...\n", svc.Type.String())
-		if err := d.waitInstancesRunning(instanceIDs); err != nil {
-			return err
-		}
-
-		log.Printf("👉 [%s] 获取实例公网 IP...\n", svc.Type.String())
-		ips, err := d.getInstancePublicIPs(instanceIDs)
-		if err != nil {
-			return err
-		}
-		log.Printf("[%s] 实例 IP: %v\n", svc.Type.String(), ips)
-
-		// 记录服务器信息到输出文件中（包含与实例 Name tag 一致的逻辑名称）。
-		servers := make([]ServerInfo, 0, len(ips))
-		for idx, ip := range ips {
-			servers = append(servers, ServerInfo{
-				IP:          ip,
-				ServiceType: svc.Type.String(),
-				Name:        d.buildInstanceName(svc.TagPrefix, svc.Type.String(), idx+1),
-			})
-		}
-		if err := d.outputMgr.AddServers(servers); err != nil {
-			log.Printf("写入服务器列表失败: %v\n", err)
-		}
-
-		log.Printf("👉 [%s] 预登记脚本状态（pending，可用于后续 restore）...\n", svc.Type.String())
-		if err := d.preRegisterStatuses(ips, svc); err != nil {
-			return err
-		}
-
-		log.Printf("👉 [%s] 等待每台机器 SSH 就绪...\n", svc.Type.String())
-		if err := d.waitAllSSHReady(ips, svc); err != nil {
-			return err
-		}
-
-		log.Printf("👉 [%s] 批量执行远程命令（后台）...\n", svc.Type.String())
-		if err := d.runCommandsOnInstances(ips, svc); err != nil {
+		if err := d.runService(svc); err != nil {
 			return err
 		}
 	}
@@ -305,6 +261,114 @@ func (d *Deployer) Run() error {
 
 	log.Println("✅ 所有 service 执行完成！")
 	return nil
+}
+
+func (d *Deployer) runService(svc ServiceConfig) error {
+	target := int(svc.Count)
+	log.Printf("👉 [%s] 目标可用机器数=%d，开始进行 SSH 可用性收敛...\n", svc.Type.String(), target)
+
+	readyIPs, err := d.acquireSSHReadyIPs(svc, target)
+	if err != nil {
+		return err
+	}
+	log.Printf("✅ [%s] SSH 可用机器收敛完成，数量=%d，IP=%v\n", svc.Type.String(), len(readyIPs), readyIPs)
+
+	// SSH 收敛完成后才构建 name/command，避免将不可 SSH 机器纳入后续流程。
+	servers := make([]ServerInfo, 0, len(readyIPs))
+	for idx, ip := range readyIPs {
+		servers = append(servers, ServerInfo{
+			IP:          ip,
+			ServiceType: svc.Type.String(),
+			Name:        d.buildInstanceName(svc.TagPrefix, svc.Type.String(), idx+1),
+		})
+	}
+	if err := d.outputMgr.AddServers(servers); err != nil {
+		log.Printf("写入服务器列表失败: %v\n", err)
+	}
+
+	log.Printf("👉 [%s] 预登记脚本状态（pending，可用于后续 restore）...\n", svc.Type.String())
+	if err := d.preRegisterStatuses(readyIPs, svc); err != nil {
+		return err
+	}
+
+	log.Printf("👉 [%s] 批量执行远程命令（后台）...\n", svc.Type.String())
+	if err := d.runCommandsOnInstances(readyIPs, svc); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Deployer) acquireSSHReadyIPs(svc ServiceConfig, target int) ([]string, error) {
+	return d.acquireSSHReadyIPsWithProvider(svc, target, d.sshAcquireMaxRound(), func(need int, round int, svc ServiceConfig) ([]string, []string, error) {
+		log.Printf("👉 [%s] 第 %d/%d 轮补机：需补 %d 台\n", svc.Type.String(), round, d.sshAcquireMaxRound(), need)
+		batchSvc := svc
+		batchSvc.Count = uint(need)
+
+		launcher := NewEC2RunInstancesLauncher(d.ctx, d.ec2Client, d.cfg.CommonConfig, d.buildInstanceName)
+		instanceIDs, err := launcher.Run(batchSvc)
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Printf("[%s] 第 %d 轮实例 ID: %v\n", svc.Type.String(), round, instanceIDs)
+
+		log.Printf("👉 [%s] 第 %d 轮等待实例进入 running 状态...\n", svc.Type.String(), round)
+		if err := d.waitInstancesRunning(instanceIDs); err != nil {
+			return nil, nil, err
+		}
+
+		log.Printf("👉 [%s] 第 %d 轮获取实例公网 IP...\n", svc.Type.String(), round)
+		ips, err := d.getInstancePublicIPs(instanceIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Printf("[%s] 第 %d 轮实例 IP: %v\n", svc.Type.String(), round, ips)
+		if err := d.outputMgr.AddAllIPs(ips); err != nil {
+			return nil, nil, fmt.Errorf("写入 all_ips.json 失败: %w", err)
+		}
+
+		log.Printf("👉 [%s] 第 %d 轮等待每台机器 SSH 就绪...\n", svc.Type.String(), round)
+		return d.waitAllSSHReady(ips, svc)
+	})
+}
+
+func (d *Deployer) acquireSSHReadyIPsWithProvider(svc ServiceConfig, target, maxRound int, provider func(need int, round int, svc ServiceConfig) ([]string, []string, error)) ([]string, error) {
+	if target <= 0 {
+		return nil, nil
+	}
+	if maxRound <= 0 {
+		maxRound = 1
+	}
+
+	readyIPs := make([]string, 0, target)
+	failureRounds := make([]string, 0)
+
+	for round := 1; round <= maxRound; round++ {
+		need := target - len(readyIPs)
+		if need <= 0 {
+			break
+		}
+		successIPs, failedIPs, err := provider(need, round, svc)
+		if err != nil {
+			return nil, err
+		}
+		if len(failedIPs) > 0 {
+			failureRounds = append(failureRounds, fmt.Sprintf("round=%d failed=%v", round, failedIPs))
+			log.Printf("⚠️ [%s] 第 %d 轮 SSH 失败 %d 台，将按失败台数补机: %v\n", svc.Type.String(), round, len(failedIPs), failedIPs)
+		}
+		readyIPs = append(readyIPs, successIPs...)
+		log.Printf("ℹ️ [%s] 第 %d 轮 SSH 成功 %d 台，累计可用 %d/%d\n", svc.Type.String(), round, len(successIPs), len(readyIPs), target)
+	}
+
+	if len(readyIPs) < target {
+		errMsg := fmt.Sprintf("[%s] SSH 可用机器不足: target=%d, ready=%d, maxRound=%d", svc.Type.String(), target, len(readyIPs), maxRound)
+		if len(failureRounds) > 0 {
+			errMsg = fmt.Sprintf("%s, details=%s", errMsg, strings.Join(failureRounds, "; "))
+		}
+		return nil, errors.New(errMsg)
+	}
+
+	return readyIPs[:target], nil
 }
 
 func (d *Deployer) waitInstancesRunning(ids []*string) error {
@@ -340,49 +404,64 @@ func (d *Deployer) getInstancePublicIPs(ids []*string) ([]string, error) {
 	return ips, nil
 }
 
-func (d *Deployer) waitAllSSHReady(ips []string, svc ServiceConfig) error {
+func (d *Deployer) waitAllSSHReady(ips []string, svc ServiceConfig) ([]string, []string, error) {
+	if len(ips) == 0 {
+		return nil, nil, nil
+	}
+
 	var (
-		mu   sync.Mutex
-		errs []error
+		mu         sync.Mutex
+		errs       []error
+		readyFlags = make([]bool, len(ips))
+		failFlags  = make([]bool, len(ips))
 	)
 
-	addErr := func(ip, name string, err error) {
+	addErr := func(ip string, err error) {
 		if err == nil {
 			return
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if name != "" {
-			errs = append(errs, fmt.Errorf("[%s][%s] %w", ip, name, err))
-		} else {
-			errs = append(errs, fmt.Errorf("[%s] %w", ip, err))
-		}
+		errs = append(errs, fmt.Errorf("[%s] %w", ip, err))
 	}
 
 	runWithBatchLimit("wait-ssh-ready", len(ips), d.sshMaxConcurrency(), func(i int) {
 		ip := ips[i]
-		name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
-		log.Printf("[%s][%s] 等待 SSH 就绪...\n", ip, name)
+		log.Printf("[%s] 等待 SSH 就绪...\n", ip)
 
 		attempts, err := d.waitSSHReadyWithRetry(ip)
 		now := time.Now().Unix()
 		if err != nil {
-			addErr(ip, name, err)
-			if persistErr := d.outputMgr.UpdateSSHScriptStatus(ip, svc.Type.String(), name, "fail", attempts, err.Error(), now); persistErr != nil {
-				addErr(ip, name, fmt.Errorf("写入 ssh_scripts.json 失败: %w", persistErr))
+			failFlags[i] = true
+			if persistErr := d.outputMgr.UpdateSSHScriptStatus(ip, svc.Type.String(), "", "fail", attempts, err.Error(), now); persistErr != nil {
+				addErr(ip, fmt.Errorf("写入 ssh_scripts.json 失败: %w", persistErr))
 			}
 			return
 		}
+		readyFlags[i] = true
 
-		if persistErr := d.outputMgr.UpdateSSHScriptStatus(ip, svc.Type.String(), name, "success", attempts, "", now); persistErr != nil {
-			addErr(ip, name, fmt.Errorf("写入 ssh_scripts.json 失败: %w", persistErr))
+		if persistErr := d.outputMgr.UpdateSSHScriptStatus(ip, svc.Type.String(), "", "success", attempts, "", now); persistErr != nil {
+			addErr(ip, fmt.Errorf("写入 ssh_scripts.json 失败: %w", persistErr))
 		}
 	})
 
-	if len(errs) == 0 {
-		return nil
+	if len(errs) != 0 {
+		return nil, nil, deployMultiError{errs: errs}
 	}
-	return deployMultiError{errs: errs}
+
+	successIPs := make([]string, 0, len(ips))
+	failedIPs := make([]string, 0, len(ips))
+	for i, ip := range ips {
+		if readyFlags[i] {
+			successIPs = append(successIPs, ip)
+			continue
+		}
+		if failFlags[i] {
+			failedIPs = append(failedIPs, ip)
+		}
+	}
+
+	return successIPs, failedIPs, nil
 }
 
 func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error {
@@ -586,6 +665,10 @@ func (d *Deployer) sshReadyRetryCount() uint {
 
 func (d *Deployer) sshReadyRetryInterval() time.Duration {
 	return resolveSSHReadyRetryInterval(d.cfg.CommonConfig)
+}
+
+func (d *Deployer) sshAcquireMaxRound() int {
+	return defaultSSHAcquireMaxRound
 }
 
 func runWithBatchLimit(taskName string, total, batchLimit int, task func(index int)) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -52,6 +53,8 @@ type OutputManager struct {
 
 	mu         sync.Mutex
 	servers    []ServerInfo
+	allIPs     []string
+	allIPSet   map[string]struct{}
 	statuses   map[string]*ScriptStatus
 	sshScripts map[string]*SSHScriptStatus
 }
@@ -59,6 +62,7 @@ type OutputManager struct {
 func NewOutputManager(outputDir string) *OutputManager {
 	return &OutputManager{
 		outputDir:  outputDir,
+		allIPSet:   make(map[string]struct{}),
 		statuses:   make(map[string]*ScriptStatus),
 		sshScripts: make(map[string]*SSHScriptStatus),
 	}
@@ -69,6 +73,7 @@ func NewOutputManager(outputDir string) *OutputManager {
 func LoadOutputManager(outputDir string) (*OutputManager, error) {
 	m := &OutputManager{
 		outputDir:  outputDir,
+		allIPSet:   make(map[string]struct{}),
 		statuses:   make(map[string]*ScriptStatus),
 		sshScripts: make(map[string]*SSHScriptStatus),
 	}
@@ -118,9 +123,55 @@ func LoadOutputManager(outputDir string) (*OutputManager, error) {
 		} else if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("读取 ssh_scripts.json 失败: %w", err)
 		}
+
+		// 尝试加载 all_ips.json
+		if data, err := os.ReadFile(filepath.Join(outputDir, "all_ips.json")); err == nil {
+			var list []string
+			if uErr := json.Unmarshal(data, &list); uErr != nil {
+				return nil, fmt.Errorf("解析 all_ips.json 失败: %w", uErr)
+			}
+			for _, ip := range list {
+				trimmed := strings.TrimSpace(ip)
+				if trimmed == "" {
+					continue
+				}
+				if _, exists := m.allIPSet[trimmed]; exists {
+					continue
+				}
+				m.allIPSet[trimmed] = struct{}{}
+				m.allIPs = append(m.allIPs, trimmed)
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("读取 all_ips.json 失败: %w", err)
+		}
 	}
 
 	return m, nil
+}
+
+// AddAllIPs 记录本次启动到的所有实例公网 IP 并写入 all_ips.json。
+// 该文件用于保留“启动成功但 SSH 不可达”机器的 IP，便于排查网络与安全组问题。
+func (m *OutputManager) AddAllIPs(ips []string) error {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, ip := range ips {
+		trimmed := strings.TrimSpace(ip)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := m.allIPSet[trimmed]; exists {
+			continue
+		}
+		m.allIPSet[trimmed] = struct{}{}
+		m.allIPs = append(m.allIPs, trimmed)
+	}
+
+	return m.saveAllIPsLocked()
 }
 
 // UpdateSSHScriptStatus 更新某台服务器 SSH 就绪探测状态。
@@ -348,5 +399,22 @@ func (m *OutputManager) saveSSHScriptsLocked() error {
 	}
 
 	path := filepath.Join(m.outputDir, "ssh_scripts.json")
+	return os.WriteFile(path, data, 0o644)
+}
+
+func (m *OutputManager) saveAllIPsLocked() error {
+	if m.outputDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(m.outputDir, 0o755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(m.allIPs, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(m.outputDir, "all_ips.json")
 	return os.WriteFile(path, data, 0o644)
 }

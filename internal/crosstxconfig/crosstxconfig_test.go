@@ -2,6 +2,7 @@ package crosstxconfig
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,7 +93,7 @@ func writeTestServersAndConfigFiles(t *testing.T) (string, string, string) {
 
 	tmpDir := t.TempDir()
 	serversPath := filepath.Join(tmpDir, "servers.json")
-	outPath := filepath.Join(tmpDir, "jobs.json")
+	outDir := filepath.Join(tmpDir, "output")
 	configPath := filepath.Join(tmpDir, "config.deploy.yaml")
 
 	serversJSON := `[
@@ -101,10 +102,44 @@ func writeTestServersAndConfigFiles(t *testing.T) (string, string, string) {
 ]`
 	require.NoError(t, os.WriteFile(serversPath, []byte(serversJSON), 0o644))
 
-	configYAML := "l1BridgeHubContract: \"0x00000000000000000000000000000000000000ff\"\n"
+	configYAML := `
+region: us-west-2
+securityGroupId: sg-test
+diskSizeGiB: 100
+runDuration: 1h
+sshUser: ec2-user
+sshKeyDir: ~/.ssh
+sshMaxConcurrency: 4
+sshReadyRetryCount: 3
+sshReadyRetryInterval: 3s
+keyName: test-key
+logDir: ./log
+outputDir: ./output
+l1ChainId: "11155111"
+l1RpcUrl: https://example.org/rpc
+l1RpcUrlWs: wss://example.org/ws
+l1VaultMnemonic: "test test test test test test test test test test test junk"
+l1BridgeHubContract: "0x00000000000000000000000000000000000000ff"
+l1RegisterBridgePrivateKey: "0x1111111111111111111111111111111111111111111111111111111111111111"
+dryRun: true
+forceDeployL2Chain: false
+enableGenAccounts: false
+services: []
+`
 	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
 
-	return serversPath, configPath, outPath
+	return serversPath, configPath, outDir
+}
+
+func readJobsJSON(t *testing.T, path string) []Job {
+	t.Helper()
+
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var jobs []Job
+	require.NoError(t, json.Unmarshal(b, &jobs))
+	return jobs
 }
 
 func newTestChainInfo(chainType, ip, suffix string) *ChainInfo {
@@ -191,7 +226,11 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 	for _, j := range jobs {
 		require.NotEmpty(t, j.SourceL2ChainType)
 		require.NotEmpty(t, j.TargetL2ChainType)
-		require.NotEqual(t, j.SourceL2ChainType, j.TargetL2ChainType)
+		if j.SourceL2ChainType == "xjst" {
+			require.Equal(t, "xjst", j.TargetL2ChainType)
+		} else {
+			require.NotEqual(t, j.SourceL2ChainType, j.TargetL2ChainType)
+		}
 		require.NotEmpty(t, j.Mnemonic)
 		if firstMnemonic == "" {
 			firstMnemonic = j.Mnemonic
@@ -385,7 +424,7 @@ func TestPickChainEntries_InvalidName_FailFast(t *testing.T) {
 }
 
 func TestGenerateWithFetcher_ConcurrentAndRetrySuccess(t *testing.T) {
-	serversPath, configPath, outPath := writeTestServersAndConfigFiles(t)
+	serversPath, configPath, outDir := writeTestServersAndConfigFiles(t)
 
 	opKey := "op@1.1.1.1"
 	cdkKey := "cdk@2.2.2.2"
@@ -405,7 +444,7 @@ func TestGenerateWithFetcher_ConcurrentAndRetrySuccess(t *testing.T) {
 	res, err := GenerateWithFetcher(context.Background(), GenerateParams{
 		ServersPath:       serversPath,
 		ConfigPath:        configPath,
-		OutPath:           outPath,
+		OutPath:           outDir,
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
@@ -416,10 +455,29 @@ func TestGenerateWithFetcher_ConcurrentAndRetrySuccess(t *testing.T) {
 	require.Equal(t, 3, fetcher.Calls(opKey), "op 应重试到第 3 次成功")
 	require.Equal(t, 1, fetcher.Calls(cdkKey), "cdk 应只调用 1 次")
 	require.Greater(t, fetcher.MaxActive(), 1, "应存在并发执行")
+
+	jobsDir := filepath.Join(outDir, "jobs")
+	allPath := filepath.Join(jobsDir, "all.json")
+	require.Equal(t, allPath, res.OutPath)
+	require.FileExists(t, allPath)
+
+	allJobs := readJobsJSON(t, allPath)
+	require.Len(t, allJobs, 2)
+
+	part1 := readJobsJSON(t, filepath.Join(jobsDir, "1.json"))
+	part2 := readJobsJSON(t, filepath.Join(jobsDir, "2.json"))
+	part3 := readJobsJSON(t, filepath.Join(jobsDir, "3.json"))
+	part4 := readJobsJSON(t, filepath.Join(jobsDir, "4.json"))
+	require.Len(t, part1, 1)
+	require.Len(t, part2, 1)
+	require.Len(t, part3, 0)
+	require.Len(t, part4, 0)
+	require.Equal(t, allJobs[0], part1[0])
+	require.Equal(t, allJobs[1], part2[0])
 }
 
 func TestGenerateWithFetcher_RetryExhaustedFail(t *testing.T) {
-	serversPath, configPath, outPath := writeTestServersAndConfigFiles(t)
+	serversPath, configPath, outDir := writeTestServersAndConfigFiles(t)
 
 	fetcher := newFakeRetryFetcher(map[string]fakeFetchPlan{
 		"op@1.1.1.1": {
@@ -435,7 +493,7 @@ func TestGenerateWithFetcher_RetryExhaustedFail(t *testing.T) {
 	_, err := GenerateWithFetcher(context.Background(), GenerateParams{
 		ServersPath:       serversPath,
 		ConfigPath:        configPath,
-		OutPath:           outPath,
+		OutPath:           outDir,
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
@@ -443,4 +501,59 @@ func TestGenerateWithFetcher_RetryExhaustedFail(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "attempts=3")
 	require.Equal(t, 3, fetcher.Calls("op@1.1.1.1"), "失败链应重试 3 次")
+}
+
+func TestGenerateWithFetcher_DefaultOutDirFromServersDir(t *testing.T) {
+	serversPath, configPath, _ := writeTestServersAndConfigFiles(t)
+
+	fetcher := newFakeRetryFetcher(map[string]fakeFetchPlan{
+		"op@1.1.1.1": {
+			failTimes: 0,
+			info:      newTestChainInfo("op", "1.1.1.1", "1"),
+		},
+		"cdk@2.2.2.2": {
+			failTimes: 0,
+			info:      newTestChainInfo("cdk", "2.2.2.2", "2"),
+		},
+	})
+
+	res, err := GenerateWithFetcher(context.Background(), GenerateParams{
+		ServersPath:       serversPath,
+		ConfigPath:        configPath,
+		OutPath:           "",
+		TxAmountPerWallet: 1000,
+		WalletAmount:      10,
+		BlockRange:        100000,
+	}, fetcher)
+	require.NoError(t, err)
+
+	expectedAllPath := filepath.Join(filepath.Dir(serversPath), "jobs", "all.json")
+	require.Equal(t, expectedAllPath, res.OutPath)
+	require.FileExists(t, expectedAllPath)
+}
+
+func TestSplitJobsEvenly_AverageAndOrder(t *testing.T) {
+	jobs := []Job{
+		{SourceL2ChainType: "c1"},
+		{SourceL2ChainType: "c2"},
+		{SourceL2ChainType: "c3"},
+		{SourceL2ChainType: "c4"},
+		{SourceL2ChainType: "c5"},
+		{SourceL2ChainType: "c6"},
+		{SourceL2ChainType: "c7"},
+		{SourceL2ChainType: "c8"},
+		{SourceL2ChainType: "c9"},
+		{SourceL2ChainType: "c10"},
+	}
+
+	parts := splitJobsEvenly(jobs, 4)
+	require.Len(t, parts, 4)
+	require.Len(t, parts[0], 3)
+	require.Len(t, parts[1], 3)
+	require.Len(t, parts[2], 2)
+	require.Len(t, parts[3], 2)
+	require.Equal(t, "c1", parts[0][0].SourceL2ChainType)
+	require.Equal(t, "c4", parts[1][0].SourceL2ChainType)
+	require.Equal(t, "c7", parts[2][0].SourceL2ChainType)
+	require.Equal(t, "c9", parts[3][0].SourceL2ChainType)
 }

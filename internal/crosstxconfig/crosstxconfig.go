@@ -105,9 +105,6 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	if p.ConfigPath == "" {
 		return nil, fmt.Errorf("configPath 不能为空")
 	}
-	if p.OutPath == "" {
-		return nil, fmt.Errorf("outPath 不能为空")
-	}
 	if p.TxAmountPerWallet <= 0 {
 		return nil, fmt.Errorf("txAmount 必须 > 0")
 	}
@@ -152,15 +149,54 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	if err != nil {
 		return nil, err
 	}
-	if err := WriteJSONFile(p.OutPath, jobs); err != nil {
+	baseOutputDir := strings.TrimSpace(p.OutPath)
+	if baseOutputDir == "" {
+		baseOutputDir = filepath.Dir(p.ServersPath)
+	}
+	jobsDir := filepath.Join(baseOutputDir, "jobs")
+	allPath := filepath.Join(jobsDir, "all.json")
+	if err := WriteJSONFile(allPath, jobs); err != nil {
 		return nil, err
 	}
 
+	for index, chunk := range splitJobsEvenly(jobs, 4) {
+		chunkPath := filepath.Join(jobsDir, fmt.Sprintf("%d.json", index+1))
+		if err := WriteJSONFile(chunkPath, chunk); err != nil {
+			return nil, err
+		}
+	}
+
 	return &GenerateResult{
-		OutPath:   p.OutPath,
+		OutPath:   allPath,
 		Chains:    chainKeys,
 		JobsCount: len(jobs),
 	}, nil
+}
+
+func splitJobsEvenly(jobs []Job, parts int) [][]Job {
+	if parts <= 0 {
+		return nil
+	}
+
+	chunks := make([][]Job, 0, parts)
+	baseSize := len(jobs) / parts
+	remainder := len(jobs) % parts
+	start := 0
+
+	for i := 0; i < parts; i++ {
+		size := baseSize
+		if i < remainder {
+			size++
+		}
+		end := start + size
+		chunk := make([]Job, 0, size)
+		if size > 0 {
+			chunk = append(chunk, jobs[start:end]...)
+		}
+		chunks = append(chunks, chunk)
+		start = end
+	}
+	return chunks
 }
 
 type fetchInfoResult struct {
@@ -346,6 +382,11 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
 func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string) ([]Job, error) {
 
+	mnemonic, err := GenerateMnemonic12()
+	if err != nil {
+		return nil, err
+	}
+
 	jobs := make([]Job, 0, len(chainKeys))
 	for _, srcKey := range chainKeys {
 		source := infos[srcKey]
@@ -368,11 +409,6 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 				// 随机数获取失败时回退到第一个候选目标，避免中断配置生成。
 				dstType = targetCandidates[0]
 			}
-		}
-
-		mnemonic, err := GenerateMnemonic12()
-		if err != nil {
-			return nil, err
 		}
 
 		target := infos[dstType]
