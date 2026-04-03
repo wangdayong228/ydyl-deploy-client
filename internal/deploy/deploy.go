@@ -325,8 +325,16 @@ func (d *Deployer) acquireSSHReadyIPs(svc ServiceConfig, target int) ([]string, 
 			return nil, nil, err
 		}
 		log.Printf("[%s] 第 %d 轮实例 IP: %v\n", svc.Type.String(), round, ips)
-		if err := d.outputMgr.AddAllIPs(ips); err != nil {
-			return nil, nil, fmt.Errorf("写入 all_ips.json 失败: %w", err)
+		createdServers := make([]CreatedServerInfo, 0, len(ips))
+		for i, ip := range ips {
+			createdServers = append(createdServers, CreatedServerInfo{
+				Name:        buildCreateStageTagName(svc.TagPrefix, svc.Type.String(), nextCreateOrdinal-len(instanceIDs)+i),
+				ServiceType: svc.Type.String(),
+				IP:          ip,
+			})
+		}
+		if err := d.outputMgr.AddCreatedServers(createdServers); err != nil {
+			return nil, nil, fmt.Errorf("写入 servers_create.json 失败: %w", err)
 		}
 
 		log.Printf("👉 [%s] 第 %d 轮等待每台机器 SSH 就绪...\n", svc.Type.String(), round)

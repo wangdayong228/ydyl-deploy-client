@@ -218,28 +218,40 @@ func TestRotateExistingDirWithTimestamp_SkipsEmptyAndMissing(t *testing.T) {
 	}
 }
 
-func TestOutputManagerAddAllIPs_WriteAndDeduplicate(t *testing.T) {
+func TestOutputManagerAddCreatedServers_WriteAndDeduplicate(t *testing.T) {
 	t.Parallel()
 
 	outputDir := t.TempDir()
 	mgr := NewOutputManager(outputDir)
 
-	if err := mgr.AddAllIPs([]string{"1.1.1.1", "2.2.2.2", "1.1.1.1", " 2.2.2.2 ", ""}); err != nil {
-		t.Fatalf("AddAllIPs failed: %v", err)
+	if err := mgr.AddCreatedServers([]CreatedServerInfo{
+		{Name: "ydyl-op-create-1", ServiceType: "op", IP: "1.1.1.1"},
+		{Name: "ydyl-cdk-create-1", ServiceType: "cdk", IP: "2.2.2.2"},
+		{Name: "ydyl-op-create-1", ServiceType: "op", IP: "1.1.1.1"},
+		{Name: "ydyl-cdk-create-1", ServiceType: "cdk", IP: " 2.2.2.2 "},
+		{Name: "", ServiceType: "op", IP: ""},
+	}); err != nil {
+		t.Fatalf("AddCreatedServers failed: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(outputDir, "all_ips.json"))
+	data, err := os.ReadFile(filepath.Join(outputDir, "servers_create.json"))
 	if err != nil {
-		t.Fatalf("read all_ips.json failed: %v", err)
+		t.Fatalf("read servers_create.json failed: %v", err)
 	}
 
-	var ips []string
-	if err := json.Unmarshal(data, &ips); err != nil {
-		t.Fatalf("unmarshal all_ips.json failed: %v", err)
+	var created []CreatedServerInfo
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("unmarshal servers_create.json failed: %v", err)
 	}
 
-	if strings.Join(ips, ",") != "1.1.1.1,2.2.2.2" {
-		t.Fatalf("unexpected all_ips.json content: %v", ips)
+	if len(created) != 2 {
+		t.Fatalf("unexpected servers_create.json length: %d", len(created))
+	}
+	if created[0].Name != "ydyl-op-create-1" || created[0].ServiceType != "op" || created[0].IP != "1.1.1.1" {
+		t.Fatalf("unexpected first created server: %+v", created[0])
+	}
+	if created[1].Name != "ydyl-cdk-create-1" || created[1].ServiceType != "cdk" || created[1].IP != "2.2.2.2" {
+		t.Fatalf("unexpected second created server: %+v", created[1])
 	}
 }
 

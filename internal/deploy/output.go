@@ -47,24 +47,31 @@ type SSHScriptStatus struct {
 	UpdatedAt   int64  `json:"updatedAt,omitempty"` // 状态最近更新时间（Unix 秒）
 }
 
+// CreatedServerInfo 描述创建阶段拿到的实例信息（用于排查创建后 SSH 未就绪等问题）。
+type CreatedServerInfo struct {
+	Name        string `json:"name,omitempty"`
+	ServiceType string `json:"serviceType"`
+	IP          string `json:"ip"`
+}
+
 // OutputManager 负责维护 servers.json 和 script_status.json 两个输出文件。
 type OutputManager struct {
 	outputDir string
 
-	mu         sync.Mutex
-	servers    []ServerInfo
-	allIPs     []string
-	allIPSet   map[string]struct{}
-	statuses   map[string]*ScriptStatus
-	sshScripts map[string]*SSHScriptStatus
+	mu               sync.Mutex
+	servers          []ServerInfo
+	createdServers   []CreatedServerInfo
+	createdServerSet map[string]struct{}
+	statuses         map[string]*ScriptStatus
+	sshScripts       map[string]*SSHScriptStatus
 }
 
 func NewOutputManager(outputDir string) *OutputManager {
 	return &OutputManager{
-		outputDir:  outputDir,
-		allIPSet:   make(map[string]struct{}),
-		statuses:   make(map[string]*ScriptStatus),
-		sshScripts: make(map[string]*SSHScriptStatus),
+		outputDir:        outputDir,
+		createdServerSet: make(map[string]struct{}),
+		statuses:         make(map[string]*ScriptStatus),
+		sshScripts:       make(map[string]*SSHScriptStatus),
 	}
 }
 
@@ -72,10 +79,10 @@ func NewOutputManager(outputDir string) *OutputManager {
 // 主要用于进程重启后，基于已有状态重新进行日志与脚本状态同步。
 func LoadOutputManager(outputDir string) (*OutputManager, error) {
 	m := &OutputManager{
-		outputDir:  outputDir,
-		allIPSet:   make(map[string]struct{}),
-		statuses:   make(map[string]*ScriptStatus),
-		sshScripts: make(map[string]*SSHScriptStatus),
+		outputDir:        outputDir,
+		createdServerSet: make(map[string]struct{}),
+		statuses:         make(map[string]*ScriptStatus),
+		sshScripts:       make(map[string]*SSHScriptStatus),
 	}
 
 	// 尝试加载 servers.json（如果不存在则忽略）
@@ -124,34 +131,35 @@ func LoadOutputManager(outputDir string) (*OutputManager, error) {
 			return nil, fmt.Errorf("读取 ssh_scripts.json 失败: %w", err)
 		}
 
-		// 尝试加载 all_ips.json
-		if data, err := os.ReadFile(filepath.Join(outputDir, "all_ips.json")); err == nil {
-			var list []string
+		// 尝试加载 servers_create.json
+		if data, err := os.ReadFile(filepath.Join(outputDir, "servers_create.json")); err == nil {
+			var list []CreatedServerInfo
 			if uErr := json.Unmarshal(data, &list); uErr != nil {
-				return nil, fmt.Errorf("解析 all_ips.json 失败: %w", uErr)
+				return nil, fmt.Errorf("解析 servers_create.json 失败: %w", uErr)
 			}
-			for _, ip := range list {
-				trimmed := strings.TrimSpace(ip)
-				if trimmed == "" {
+			for _, created := range list {
+				normalized := normalizeCreatedServerInfo(created)
+				if normalized.IP == "" || normalized.ServiceType == "" {
 					continue
 				}
-				if _, exists := m.allIPSet[trimmed]; exists {
+				key := compositeKey(normalized.IP, normalized.ServiceType)
+				if _, exists := m.createdServerSet[key]; exists {
 					continue
 				}
-				m.allIPSet[trimmed] = struct{}{}
-				m.allIPs = append(m.allIPs, trimmed)
+				m.createdServerSet[key] = struct{}{}
+				m.createdServers = append(m.createdServers, normalized)
 			}
 		} else if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("读取 all_ips.json 失败: %w", err)
+			return nil, fmt.Errorf("读取 servers_create.json 失败: %w", err)
 		}
 	}
 
 	return m, nil
 }
 
-// AddAllIPs 记录本次启动到的所有实例公网 IP 并写入 all_ips.json。
-// 该文件用于保留“启动成功但 SSH 不可达”机器的 IP，便于排查网络与安全组问题。
-func (m *OutputManager) AddAllIPs(ips []string) error {
+// AddCreatedServers 记录创建阶段拿到的实例信息并写入 servers_create.json。
+// 该文件用于保留“启动成功但 SSH 不可达”机器的创建信息，便于排查网络与安全组问题。
+func (m *OutputManager) AddCreatedServers(servers []CreatedServerInfo) error {
 	if m == nil {
 		return nil
 	}
@@ -159,19 +167,20 @@ func (m *OutputManager) AddAllIPs(ips []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, ip := range ips {
-		trimmed := strings.TrimSpace(ip)
-		if trimmed == "" {
+	for _, server := range servers {
+		normalized := normalizeCreatedServerInfo(server)
+		if normalized.IP == "" || normalized.ServiceType == "" {
 			continue
 		}
-		if _, exists := m.allIPSet[trimmed]; exists {
+		key := compositeKey(normalized.IP, normalized.ServiceType)
+		if _, exists := m.createdServerSet[key]; exists {
 			continue
 		}
-		m.allIPSet[trimmed] = struct{}{}
-		m.allIPs = append(m.allIPs, trimmed)
+		m.createdServerSet[key] = struct{}{}
+		m.createdServers = append(m.createdServers, normalized)
 	}
 
-	return m.saveAllIPsLocked()
+	return m.saveCreatedServersLocked()
 }
 
 // UpdateSSHScriptStatus 更新某台服务器 SSH 就绪探测状态。
@@ -402,7 +411,7 @@ func (m *OutputManager) saveSSHScriptsLocked() error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func (m *OutputManager) saveAllIPsLocked() error {
+func (m *OutputManager) saveCreatedServersLocked() error {
 	if m.outputDir == "" {
 		return nil
 	}
@@ -410,11 +419,19 @@ func (m *OutputManager) saveAllIPsLocked() error {
 		return err
 	}
 
-	data, err := json.MarshalIndent(m.allIPs, "", "  ")
+	data, err := json.MarshalIndent(m.createdServers, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	path := filepath.Join(m.outputDir, "all_ips.json")
+	path := filepath.Join(m.outputDir, "servers_create.json")
 	return os.WriteFile(path, data, 0o644)
+}
+
+func normalizeCreatedServerInfo(server CreatedServerInfo) CreatedServerInfo {
+	return CreatedServerInfo{
+		Name:        strings.TrimSpace(server.Name),
+		ServiceType: strings.TrimSpace(server.ServiceType),
+		IP:          strings.TrimSpace(server.IP),
+	}
 }
