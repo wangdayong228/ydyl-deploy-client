@@ -300,16 +300,18 @@ func (d *Deployer) runService(svc ServiceConfig) error {
 }
 
 func (d *Deployer) acquireSSHReadyIPs(svc ServiceConfig, target int) ([]string, error) {
+	nextCreateOrdinal := 1
 	return d.acquireSSHReadyIPsWithProvider(svc, target, d.sshAcquireMaxRound(), func(need int, round int, svc ServiceConfig) ([]string, []string, error) {
 		log.Printf("👉 [%s] 第 %d/%d 轮补机：需补 %d 台\n", svc.Type.String(), round, d.sshAcquireMaxRound(), need)
 		batchSvc := svc
 		batchSvc.Count = uint(need)
 
 		launcher := NewEC2RunInstancesLauncher(d.ctx, d.ec2Client, d.cfg.CommonConfig, d.buildInstanceName)
-		instanceIDs, err := launcher.Run(batchSvc)
+		instanceIDs, err := launcher.RunWithStartOrdinal(batchSvc, nextCreateOrdinal)
 		if err != nil {
 			return nil, nil, err
 		}
+		nextCreateOrdinal += len(instanceIDs)
 		log.Printf("[%s] 第 %d 轮实例 ID: %v\n", svc.Type.String(), round, instanceIDs)
 
 		log.Printf("👉 [%s] 第 %d 轮等待实例进入 running 状态...\n", svc.Type.String(), round)

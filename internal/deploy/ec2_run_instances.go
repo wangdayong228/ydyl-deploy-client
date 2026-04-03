@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/nft-rainbow/rainbow-goutils/utils/commonutils"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -30,9 +31,16 @@ func NewEC2RunInstancesLauncher(ctx context.Context, ec2Client *ec2.EC2, commonC
 }
 
 func (l *EC2RunInstancesLauncher) Run(svc ServiceConfig) ([]*string, error) {
+	return l.RunWithStartOrdinal(svc, 1)
+}
+
+func (l *EC2RunInstancesLauncher) RunWithStartOrdinal(svc ServiceConfig, startOrdinal int) ([]*string, error) {
 	totalCount := int(svc.Count)
 	if totalCount <= 0 {
 		return nil, nil
+	}
+	if startOrdinal <= 0 {
+		startOrdinal = 1
 	}
 
 	totalBatches := (totalCount + maxRunInstancesBatchSize - 1) / maxRunInstancesBatchSize
@@ -53,8 +61,9 @@ func (l *EC2RunInstancesLauncher) Run(svc ServiceConfig) ([]*string, error) {
 			return nil, fmt.Errorf("[%s] 批次 %d/%d 创建数量异常，期望=%d，实际=%d", svc.Type.String(), batchNo, totalBatches, batchCount, len(ids))
 		}
 
-		// 为每台实例按服务维度的全局序号打 Name 标签，保持与原有命名规则一致。
-		if err := l.tagInstancesSequentially(svc, ids, len(allIDs)+1); err != nil {
+		// 创建阶段统一打 Name 标签：tagPrefix-serviceType-create-ordinal。
+		// 补机场景通过 startOrdinal 保证跨轮次连续递增。
+		if err := l.tagInstancesSequentially(svc, ids, startOrdinal+len(allIDs)); err != nil {
 			return nil, err
 		}
 		log.Printf("✅ [%s] 批次 %d/%d 创建成功，机型=%s，实例数=%d\n", svc.Type.String(), batchNo, totalBatches, usedInstanceType, len(ids))
@@ -120,9 +129,22 @@ func (l *EC2RunInstancesLauncher) buildRunInstancesInput(svc ServiceConfig, inst
 
 func (l *EC2RunInstancesLauncher) tagInstancesSequentially(svc ServiceConfig, ids []*string, startOrdinal int) error {
 	for i, id := range ids {
-		name := l.buildInstanceName(svc.TagPrefix, svc.Type.String(), startOrdinal+i)
+		name := buildCreateStageTagName(svc.TagPrefix, svc.Type.String(), startOrdinal+i)
+		if err := l.createNameTagWithRetry(id, name); err != nil {
+			return fmt.Errorf("为实例 %s 打标签失败: %w", aws.StringValue(id), err)
+		}
+	}
+	return nil
+}
+
+func buildCreateStageTagName(tagPrefix, serviceType string, ordinal int) string {
+	return fmt.Sprintf("%s-%s-create-%d", tagPrefix, serviceType, ordinal)
+}
+
+func (l *EC2RunInstancesLauncher) createNameTagWithRetry(instanceID *string, name string) error {
+	return commonutils.Retry(3, 1000, "EC2打Name标签", func() error {
 		_, err := l.ec2Client.CreateTagsWithContext(l.ctx, &ec2.CreateTagsInput{
-			Resources: []*string{id},
+			Resources: []*string{instanceID},
 			Tags: []*ec2.Tag{
 				{
 					Key:   aws.String("Name"),
@@ -130,11 +152,8 @@ func (l *EC2RunInstancesLauncher) tagInstancesSequentially(svc ServiceConfig, id
 				},
 			},
 		})
-		if err != nil {
-			return fmt.Errorf("为实例 %s 打标签失败: %w", aws.StringValue(id), err)
-		}
-	}
-	return nil
+		return err
+	})
 }
 
 func isCapacityError(err error) bool {

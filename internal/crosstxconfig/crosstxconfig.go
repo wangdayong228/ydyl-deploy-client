@@ -81,6 +81,7 @@ type GenerateParams struct {
 	ServersPath       string
 	ConfigPath        string
 	OutPath           string
+	PartNumber        int
 	TxAmountPerWallet int
 	WalletAmount      int
 	BlockRange        int64
@@ -113,6 +114,9 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	}
 	if p.BlockRange <= 0 {
 		return nil, fmt.Errorf("blockRange 必须 > 0")
+	}
+	if p.PartNumber <= 0 {
+		return nil, fmt.Errorf("partNumber 必须 > 0")
 	}
 
 	deployCfg := deploy.LoadConfigFromFile(p.ConfigPath)
@@ -159,7 +163,7 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		return nil, err
 	}
 
-	for index, chunk := range splitJobsEvenly(jobs, 4) {
+	for index, chunk := range splitJobsEvenly(jobs, p.PartNumber) {
 		chunkPath := filepath.Join(jobsDir, fmt.Sprintf("%d.json", index+1))
 		if err := WriteJSONFile(chunkPath, chunk); err != nil {
 			return nil, err

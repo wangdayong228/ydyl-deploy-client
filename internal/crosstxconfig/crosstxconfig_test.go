@@ -445,6 +445,7 @@ func TestGenerateWithFetcher_ConcurrentAndRetrySuccess(t *testing.T) {
 		ServersPath:       serversPath,
 		ConfigPath:        configPath,
 		OutPath:           outDir,
+		PartNumber:        4,
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
@@ -494,6 +495,7 @@ func TestGenerateWithFetcher_RetryExhaustedFail(t *testing.T) {
 		ServersPath:       serversPath,
 		ConfigPath:        configPath,
 		OutPath:           outDir,
+		PartNumber:        4,
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
@@ -521,6 +523,7 @@ func TestGenerateWithFetcher_DefaultOutDirFromServersDir(t *testing.T) {
 		ServersPath:       serversPath,
 		ConfigPath:        configPath,
 		OutPath:           "",
+		PartNumber:        4,
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
@@ -556,4 +559,49 @@ func TestSplitJobsEvenly_AverageAndOrder(t *testing.T) {
 	require.Equal(t, "c4", parts[1][0].SourceL2ChainType)
 	require.Equal(t, "c7", parts[2][0].SourceL2ChainType)
 	require.Equal(t, "c9", parts[3][0].SourceL2ChainType)
+}
+
+func TestGenerateWithFetcher_PartNumber8(t *testing.T) {
+	serversPath, configPath, outDir := writeTestServersAndConfigFiles(t)
+
+	fetcher := newFakeRetryFetcher(map[string]fakeFetchPlan{
+		"op@1.1.1.1": {
+			failTimes: 0,
+			info:      newTestChainInfo("op", "1.1.1.1", "1"),
+		},
+		"cdk@2.2.2.2": {
+			failTimes: 0,
+			info:      newTestChainInfo("cdk", "2.2.2.2", "2"),
+		},
+	})
+
+	_, err := GenerateWithFetcher(context.Background(), GenerateParams{
+		ServersPath:       serversPath,
+		ConfigPath:        configPath,
+		OutPath:           outDir,
+		PartNumber:        8,
+		TxAmountPerWallet: 1000,
+		WalletAmount:      10,
+		BlockRange:        100000,
+	}, fetcher)
+	require.NoError(t, err)
+
+	jobsDir := filepath.Join(outDir, "jobs")
+	part1 := readJobsJSON(t, filepath.Join(jobsDir, "1.json"))
+	part2 := readJobsJSON(t, filepath.Join(jobsDir, "2.json"))
+	part3 := readJobsJSON(t, filepath.Join(jobsDir, "3.json"))
+	part4 := readJobsJSON(t, filepath.Join(jobsDir, "4.json"))
+	part5 := readJobsJSON(t, filepath.Join(jobsDir, "5.json"))
+	part6 := readJobsJSON(t, filepath.Join(jobsDir, "6.json"))
+	part7 := readJobsJSON(t, filepath.Join(jobsDir, "7.json"))
+	part8 := readJobsJSON(t, filepath.Join(jobsDir, "8.json"))
+
+	require.Len(t, part1, 1)
+	require.Len(t, part2, 1)
+	require.Len(t, part3, 0)
+	require.Len(t, part4, 0)
+	require.Len(t, part5, 0)
+	require.Len(t, part6, 0)
+	require.Len(t, part7, 0)
+	require.Len(t, part8, 0)
 }
