@@ -3,14 +3,17 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
 )
 
 var (
-	configPath string
+	configPath        string
+	serversCreatePath string
 )
 
 func init() {
@@ -22,6 +25,7 @@ func init() {
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "f", "./config.deploy.yaml", "部署配置文件路径（YAML）")
+	cmd.Flags().StringVar(&serversCreatePath, "servers-create", "", "已有 servers_create.json 路径（会先复制到临时文件再部署；不传则按配置新建 EC2）")
 	rootCmd.AddCommand(cmd)
 }
 
@@ -31,7 +35,24 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	cfg := deploy.LoadConfigFromFile(configPath)
 
-	if err := deploy.RunWithRestoreRetry(ctx, *cfg); err != nil {
+	opts := deploy.RunOptions{}
+	if serversCreatePath != "" {
+		origAbs, err := filepath.Abs(serversCreatePath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "deploy 失败：解析 --servers-create 路径：", err)
+			return err
+		}
+		tmpAbs, cleanup, err := deploy.CopyServersCreateSnapshotToTemp(serversCreatePath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "deploy 失败：", err)
+			return err
+		}
+		defer cleanup()
+		log.Printf("servers_create 快照复制: %s -> %s\n", origAbs, tmpAbs)
+		opts.ServersCreateJSONPath = tmpAbs
+	}
+
+	if err := deploy.RunWithRestoreRetryWithOptions(ctx, *cfg, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "deploy 失败：", err)
 		return err
 	}

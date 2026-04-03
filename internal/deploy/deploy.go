@@ -48,6 +48,10 @@ type Deployer struct {
 	sshKeyPath string
 	// 同一轮 deploy 固定随机段，用于 L1 vault 私钥派生路径倒数第三段。
 	l1VaultDeriveRand uint32
+
+	// reuseFromSnapshot 为 true 时从 importedSnapshot 取 IP，跳过 EC2 创建。
+	reuseFromSnapshot bool
+	importedSnapshot  []CreatedServerInfo
 }
 
 const (
@@ -61,7 +65,7 @@ const (
 var waitSSHReadyFunc = sshutil.WaitSSH
 
 // NewDeployer 负责初始化一次部署执行所需的基础依赖（目录/输出管理/AWS client/SSH key 路径）。
-func NewDeployer(ctx context.Context, cfg DeployConfig) (*Deployer, error) {
+func NewDeployer(ctx context.Context, cfg DeployConfig, opts RunOptions) (*Deployer, error) {
 	if err := cfg.CheckValid(); err != nil {
 		return nil, err
 	}
@@ -114,6 +118,17 @@ func NewDeployer(ctx context.Context, cfg DeployConfig) (*Deployer, error) {
 		return nil, fmt.Errorf("生成 L1 vault 派生随机段失败: %w", err)
 	}
 
+	reuseFromSnapshot := false
+	var importedSnapshot []CreatedServerInfo
+	if strings.TrimSpace(opts.ServersCreateJSONPath) != "" {
+		importedSnapshot, err = LoadCreatedServersFromFile(opts.ServersCreateJSONPath)
+		if err != nil {
+			return nil, fmt.Errorf("加载 servers_create 快照失败（%s）: %w", opts.ServersCreateJSONPath, err)
+		}
+		reuseFromSnapshot = true
+		log.Printf("✅ 已加载 servers_create 快照: path=%s, 有效条目=%d\n", opts.ServersCreateJSONPath, len(importedSnapshot))
+	}
+
 	return &Deployer{
 		ctx:               ctx,
 		cfg:               cfg,
@@ -121,6 +136,8 @@ func NewDeployer(ctx context.Context, cfg DeployConfig) (*Deployer, error) {
 		outputMgr:         outputMgr,
 		sshKeyPath:        keyPath,
 		l1VaultDeriveRand: deriveRand,
+		reuseFromSnapshot: reuseFromSnapshot,
+		importedSnapshot:  importedSnapshot,
 	}, nil
 }
 
@@ -137,7 +154,12 @@ func generateL1VaultDeriveRand() (uint32, error) {
 // 1）批量创建对应数量的 EC2 实例；2）等待实例 running；3）获取公网 IP 并等待 SSH 就绪；
 // 4）为每个实例构造远程命令并执行；5）收集日志与执行结果。
 func Run(ctx context.Context, cfg DeployConfig) error {
-	d, err := NewDeployer(ctx, cfg)
+	return RunWithOptions(ctx, cfg, RunOptions{})
+}
+
+// RunWithOptions 与 Run 相同，可通过 opts 指定复用 servers_create 快照等行为。
+func RunWithOptions(ctx context.Context, cfg DeployConfig, opts RunOptions) error {
+	d, err := NewDeployer(ctx, cfg, opts)
 	if err != nil {
 		return err
 	}
@@ -146,7 +168,12 @@ func Run(ctx context.Context, cfg DeployConfig) error {
 
 // RunWithRestoreRetry 在 deploy 完成后，如果仍存在 failed 节点，则按 deploy-restore 流程最多重试 3 次。
 func RunWithRestoreRetry(ctx context.Context, cfg DeployConfig) error {
-	deployErr := Run(ctx, cfg)
+	return RunWithRestoreRetryWithOptions(ctx, cfg, RunOptions{})
+}
+
+// RunWithRestoreRetryWithOptions 与 RunWithRestoreRetry 相同，支持传入 RunOptions。
+func RunWithRestoreRetryWithOptions(ctx context.Context, cfg DeployConfig, opts RunOptions) error {
+	deployErr := RunWithOptions(ctx, cfg, opts)
 
 	failedIPs, listErr := listFailedIPsFromOutput(cfg.CommonConfig)
 	if listErr != nil {
@@ -300,6 +327,10 @@ func (d *Deployer) runService(svc ServiceConfig) error {
 }
 
 func (d *Deployer) acquireSSHReadyIPs(svc ServiceConfig, target int) ([]string, error) {
+	if d.reuseFromSnapshot {
+		return d.acquireSSHReadyIPsFromSnapshot(svc, target)
+	}
+
 	nextCreateOrdinal := 1
 	return d.acquireSSHReadyIPsWithProvider(svc, target, d.sshAcquireMaxRound(), func(need int, round int, svc ServiceConfig) ([]string, []string, error) {
 		log.Printf("👉 [%s] 第 %d/%d 轮补机：需补 %d 台\n", svc.Type.String(), round, d.sshAcquireMaxRound(), need)
@@ -340,6 +371,48 @@ func (d *Deployer) acquireSSHReadyIPs(svc ServiceConfig, target int) ([]string, 
 		log.Printf("👉 [%s] 第 %d 轮等待每台机器 SSH 就绪...\n", svc.Type.String(), round)
 		return d.waitAllSSHReady(ips, svc)
 	})
+}
+
+func (d *Deployer) acquireSSHReadyIPsFromSnapshot(svc ServiceConfig, target int) ([]string, error) {
+	pool := d.snapshotIPPoolForService(svc.Type.String())
+	if len(pool) < target {
+		return nil, fmt.Errorf("[%s] servers_create 快照中可用 IP 不足: need=%d, got=%d", svc.Type.String(), target, len(pool))
+	}
+
+	log.Printf("👉 [%s] 复用 servers_create 快照，跳过 EC2 创建；候选 IP 数=%d，目标=%d\n", svc.Type.String(), len(pool), target)
+
+	nextIdx := 0
+	return d.acquireSSHReadyIPsWithProvider(svc, target, d.sshAcquireMaxRound(), func(need int, round int, svc ServiceConfig) ([]string, []string, error) {
+		if nextIdx+need > len(pool) {
+			return nil, nil, fmt.Errorf("[%s] servers_create 快照池已耗尽: need=%d, remaining=%d", svc.Type.String(), need, len(pool)-nextIdx)
+		}
+		batch := pool[nextIdx : nextIdx+need]
+		nextIdx += need
+		log.Printf("👉 [%s] 第 %d/%d 轮 SSH 探测：批量机器数=%d，IP=%v\n", svc.Type.String(), round, d.sshAcquireMaxRound(), len(batch), batch)
+		return d.waitAllSSHReady(batch, svc)
+	})
+}
+
+func (d *Deployer) snapshotIPPoolForService(wantType string) []string {
+	want := strings.TrimSpace(wantType)
+	seen := make(map[string]struct{})
+	order := make([]string, 0, len(d.importedSnapshot))
+	for _, c := range d.importedSnapshot {
+		if !strings.EqualFold(strings.TrimSpace(c.ServiceType), want) {
+			continue
+		}
+		ip := strings.TrimSpace(c.IP)
+		if ip == "" {
+			continue
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		order = append(order, ip)
+	}
+	sort.Strings(order)
+	return order
 }
 
 func (d *Deployer) acquireSSHReadyIPsWithProvider(svc ServiceConfig, target, maxRound int, provider func(need int, round int, svc ServiceConfig) ([]string, []string, error)) ([]string, error) {
