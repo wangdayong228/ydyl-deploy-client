@@ -217,7 +217,8 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 	}
 
 	l1BridgeReceiver := "0x00000000000000000000000000000000000000ff"
-	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, l1BridgeReceiver)
+	l1RPC := "https://example.org/rpc"
+	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, l1BridgeReceiver, l1RPC)
 	require.NoError(t, err)
 
 	require.Len(t, jobs, 3)
@@ -265,6 +266,8 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP), j.TargetL2RPC)
 		require.Equal(t, target.Contracts.L2BridgeReceiveContract.Hex(), j.TargetL2Bridge)
 		require.Equal(t, source.Summary.L2_PRIVATE_KEY.Hex(), j.SourceL2BalanceSenderPrivatekey)
+		require.Equal(t, source.Contracts.L1BridgeReceiveContract.Hex(), j.SourceL1Bridge)
+		require.Equal(t, l1RPC, j.L1RPC)
 	}
 	require.Len(t, seenSources, len(chainTypes))
 }
@@ -304,7 +307,7 @@ func TestGenerateJobs_WaitForReceipts_BySourceChainType(t *testing.T) {
 		},
 	}
 
-	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff")
+	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
 	require.NoError(t, err)
 	require.Len(t, jobs, 2)
 

@@ -39,6 +39,8 @@ type Job struct {
 	TargetL2Bridge  string `json:"target_l2_bridge"`
 	BlockRange      int64  `json:"block_range"`
 	WaitForReceipts bool   `json:"wait_for_receipts"`
+	SourceL1Bridge  string `json:"source_l1_bridge"`
+	L1RPC           string `json:"l1_rpc"`
 }
 
 type ChainInfo struct {
@@ -124,6 +126,10 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	if l1BridgeReceiver == "" {
 		return nil, fmt.Errorf("deploy 配置中 l1BridgeHubContract 不能为空")
 	}
+	l1RPC := strings.TrimSpace(deployCfg.L1RpcUrl)
+	if l1RPC == "" {
+		return nil, fmt.Errorf("deploy 配置中 l1RpcUrl 不能为空")
+	}
 
 	servers, err := LoadServers(p.ServersPath)
 	if err != nil {
@@ -149,7 +155,7 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		return nil, err
 	}
 
-	jobs, err := GenerateJobs(chainKeys, infos, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver)
+	jobs, err := GenerateJobs(chainKeys, infos, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver, l1RPC)
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +390,7 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 // 当源链为 xjst 时，目标链固定为源链自身。
 // 助记词在内部随机生成一次（12 words），所有 jobs 复用同一个。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
-func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string) ([]Job, error) {
+func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string, l1RPC string) ([]Job, error) {
 
 	mnemonic, err := GenerateMnemonic12()
 	if err != nil {
@@ -434,6 +440,8 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 			TargetL2Bridge:  target.Contracts.L2BridgeReceiveContract.Hex(),
 			BlockRange:      blockRange,
 			WaitForReceipts: source.Type != "xjst",
+			SourceL1Bridge:  source.Contracts.L1BridgeReceiveContract.Hex(),
+			L1RPC:           l1RPC,
 		}
 
 		if target.Type == "xjst" {
