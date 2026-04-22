@@ -1,127 +1,219 @@
-## 简介
+# ydyl-deploy-client
 
-`ydyl-deploy-client` 是一个使用 Go 和 Cobra 编写的命令行工具，用于**批量在 AWS 上启动 EC2 实例，并在实例上按策略执行部署脚本**。  
-实现上参考了本仓库中 `op-work/scripts/aws-batch.sh` / `cdk-work/scripts/aws-batch.sh` 的流程，但**完全使用 Go 版实现，不再依赖 bash 脚本本身**。
+`ydyl-deploy-client` 是一个基于 Go + Cobra 的批量部署 CLI，主要用于：
 
-主要特性：
+- 在 AWS 上批量创建 EC2
+- 等待 SSH 就绪并执行远程部署命令
+- 持久化部署结果和脚本状态
+- 基于已部署链节点生成跨链压测 jobs
+- 配合 `ydyl-bench-docker` 启动批量压测与 TPS 监控
 
-- **多 service 支持**：一次部署中可以同时配置多种服务类型（如 `op`、`cdk`、`generic`、`xjst`），每种服务的数量与远程命令独立配置。
-- **自动化流程**：对每个 service 执行「创建 EC2 → 等待 running → 获取公网 IP → 等待 SSH 就绪 → 批量执行命令 → 收集日志」的完整流程。
-- **YAML 配置驱动**：所有参数通过一个 YAML 配置文件管理，命令行只需传入 `--config`。
+它已经不是单纯的“起机器脚本”，而是当前仓库跨链压测工作流的入口之一。
 
-## 安装与编译
+## 典型工作流
 
-在仓库根目录：
+最常见的顺序是：
+
+1. `deploy`
+2. `gen-cross-tx-config`
+3. 进入 `../ydyl-bench-docker` 执行 `docker-compose up --build`
+
+对应关系：
+
+- `deploy` 负责把链节点和服务拉起来
+- `gen-cross-tx-config` 负责读取 `servers.json` 和各节点上的 `ydyl-console-service`，生成 `zk-claim-service/scripts/7s_multijob.js` 所需 jobs
+- `ydyl-bench-docker` 会基于这些 jobs 启动 8 个发送容器和 1 个 TPS 监控容器
+
+## 编译与运行
 
 ```bash
-cd ydyl-deployment-suite/ydyl-deploy-client
+cd ydyl-deploy-client
 
-# 编译二进制
+# 编译
 go build -o ydyl-deploy-client .
 
-# 或直接运行
-go run . deploy -f deploy.yaml
+# 直接运行
+go run . deploy -f config.deploy.yaml
 ```
 
-要求：
+前置要求：
 
-- 已正确配置 `AWS CLI` / 环境变量（`AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 等）。
-- 本机存在对应的 SSH 私钥文件（例如 `~/.ssh/dayong-op-stack.pem`），并与配置中的 `keyName` 匹配。
+- 已配置 AWS 访问凭证
+- 本机有与 `keyName` 匹配的 SSH 私钥
+- 目标实例镜像中已具备仓库运行所需基础环境，或会在远程命令里自行准备
 
-## 命令说明
+## 主命令
 
-当前只实现一个核心子命令：
+### `deploy`
 
-- `deploy`：根据 YAML 配置文件批量创建 EC2 实例并执行远程命令。
+作用：
 
-用法：
+- 根据 `config.deploy.yaml` 批量创建或复用 EC2
+- 等待实例进入 `running`
+- 轮询 SSH 就绪
+- 远程执行链部署命令
+- 持续同步日志与脚本状态
+
+示例：
 
 ```bash
-ydyl-deploy-client deploy -f deploy.yaml [--log-dir logs/override]
+go run . deploy -f config.deploy.yaml
 ```
 
-参数：
+常见输出：
 
-- `-f, --config`（必选）：部署配置文件路径（YAML 格式）。
-- `--log-dir`（可选）：覆盖配置文件中的 `logDir`，用于指定本地日志输出目录。
+- `output/servers.json`
+- `output/script_status.json`
+- `output/servers_create.json`
+- `logs/`
 
-## 配置文件格式（YAML）
+说明：
 
-示例 `deploy.yaml`：
+- `servers.json` 是后续 `gen-cross-tx-config` 的直接输入
+- `script_status.json` 可用于 `deploy-restore` / `sync`
 
-```yaml
-region: ap-southeast-1            # AWS 区域
-ami: ami-0d5d4434d0110b7e1        # AMI ID
-instanceType: c6a.xlarge          # 实例类型
-keyName: dayong-op-stack          # EC2 Key Pair 名称（对应 ~/.ssh/dayong-op-stack.pem）
-securityGroupId: sg-02452e70d9fe7e235
-tagPrefix: dy-op                  # 实例 Name 标签前缀
+### `gen-cross-tx-config`
 
-runDuration: 50m                  # 远程机器运行时长（time.Duration 格式），会转成 sudo -n shutdown -h +N
-sshUser: ubuntu                   # SSH 用户名
-sshKeyDir: ""                     # 为空则使用 ~/.ssh
-logDir: logs                      # 本地日志目录（可被 --log-dir 覆盖）
+这是顶层文档里提到的 `gen-tx-config` 对应的真实子命令名。
 
-services:
-  # 1) OP 链部署：不显式指定 remoteCmd，则使用内置策略：
-  #    每台机器生成一个 PRIVATE_KEY（0x + 64 位 hex）和 L2_CHAIN_ID=10000+i
-  #    命令：cd /home/ubuntu/op-work/scripts/deploy-op-stack && PRIVATE_KEY=... L2_CHAIN_ID=... ./deploy-with-env.sh
-  - type: op
-    count: 3
-    remoteCmd: ""
+作用：
 
-  # 2) CDK 部署：这里示例为显式给出远程命令
-  - type: cdk
-    count: 2
-    remoteCmd: >
-      cd /home/ubuntu/cdk-work/scripts &&
-      L2_CHAIN_ID=10001 L1_CHAIN_ID=71 L1_RPC_URL=https://cfx-testnet-cdk-rpc-proxy.yidaiyilu0.site
-      ./deploy.sh cdk-gen
+- 读取 `servers.json`
+- 访问各链节点上的 `ydyl-console-service`
+- 收集 L2 RPC、桥合约、Counter 合约等信息
+- 生成 `zk-claim-service/scripts/7s_multijob.js` 使用的 jobs
 
-  # 3) 通用服务：必须显式指定 remoteCmd
-  - type: generic
-    count: 1
-    remoteCmd: "cd /home/ubuntu/some-service && ./start.sh"
-```
-
-字段说明：
-
-- **region / ami / instanceType / keyName / securityGroupId / tagPrefix**：与 `aws ec2 run-instances` 参数一一对应。
-- **runDuration**：计划关机时间，`time.Duration` 格式（如 `50m`，`1h`）。
-- **sshUser / sshKeyDir**：SSH 登录用户与私钥所在目录。
-- **logDir**：本地日志目录，每台实例一个日志文件，文件名中包含 IP 与 Name 标签。
-- **services**：
-  - `type`：服务类型，枚举值之一：`generic` / `op` / `cdk` / `xjst`。
-  - `count`：该服务需要启动的实例数量。
-  - `remoteCmd`：远程执行命令；为空时由对应 `type` 的策略自动生成（目前只对 `op` 做了默认策略）。
-
-## 行为细节
-
-对每个 `services` 中的条目，工具会依次执行：
-
-1. 调用 AWS SDK：创建 `count` 台 EC2 实例，打上初始 `Name` 标签（前缀为 `tag_prefix-type-i`）。
-2. 等待所有实例进入 `running` 状态。
-3. 查询实例公网 IP 列表。
-4. 循环使用本机 `ssh` 命令探测连通性，直到 SSH 就绪。
-5. 为每台机器构造远程命令（根据 `type` 与 `remoteCmd`），再加上自动关机前缀：`sudo -n shutdown -h +runDuration(分钟) && <remoteCmd>`。
-6. 执行远程命令，标准输出与错误重定向到本地日志文件。
-
-任一实例执行失败会在本地日志中体现，并通过返回错误退出。
-
-## 常见用法示例
+示例：
 
 ```bash
-# 使用示例配置文件 deploy.yaml 进行部署
-./ydyl-deploy-client deploy -f deploy.yaml
-
-# 同一配置文件，但把日志写到自定义目录
-./ydyl-deploy-client deploy -f deploy.yaml --log-dir logs/op-2025-01-01
+go run . gen-cross-tx-config \
+  --servers ./output/servers.json \
+  --config ./config.deploy.yaml
 ```
 
-## 注意事项
+默认输出：
 
-- **请务必确认 AWS 账户费用与配额**：本工具会一次性启动多台按小时计费的 EC2 实例。
-- 默认会设置实例在 `runDuration` 对应的分钟数后自动关机，但并不会释放 EBS 产生的所有费用，请自行根据实际情况清理资源。
-- 建议先在测试账号 / 测试区域用较小的 `count` 验证流程，再在生产环境大规模使用。
+- `output/jobs/all.json`
+- `output/jobs/1.json`
+- `output/jobs/2.json`
+- ...
+- `output/jobs/8.json`
 
+常用参数：
 
+- `--servers`
+  - `servers.json` 路径，必填
+- `--config`
+  - deploy 配置文件路径，默认 `./config.deploy.yaml`
+- `--out`
+  - 输出根目录；默认使用 `servers.json` 所在目录
+- `--part-number`
+  - jobs 拆分份数，默认 `8`
+- `--tx-amount-per-wallet`
+  - 每个 wallet 发送交易数量，默认 `1000`
+- `--wallet-amount`
+  - 每个 job 使用的 wallet 数量，默认 `10`
+- `--block-range`
+  - TPS 查询区块范围，默认 `100000`
+
+说明：
+
+- 默认生成出来的 `output/jobs` 正好是 `../ydyl-bench-docker/docker-compose.yml` 的挂载目录
+- 如果你自定义了 `--out`，需要同步调整 `ydyl-bench-docker` 的 bind mount 路径
+
+## 压测联动
+
+当 `deploy` 和 `gen-cross-tx-config` 都完成后，通常直接启动 Docker 压测：
+
+```bash
+cd ../ydyl-bench-docker
+docker-compose up --build
+```
+
+这会启动：
+
+- `multijob-1` 到 `multijob-8`
+- `tps`
+
+它们分别对应：
+
+- 8 个 `zk-claim-service/scripts/7s_multijob.js` 发送进程
+- 1 个 `zk-claim-service/scripts/h_TPSjob.js` 监控进程
+
+## 可选辅助命令
+
+除了主流程，当前 CLI 还包含一些恢复 / 调试命令：
+
+- `sync`
+  - 基于已有 `servers.json` / `script_status.json` 重新同步日志和状态
+- `deploy-restore`
+  - 基于 `script_status.json` 仅恢复失败或未完成的远程部署任务
+- `shutdown`
+  - 按 `servers.json` 对远端机器执行关机
+- `bench-cross-tx`
+  - 不走 Docker，直接本地执行 `zk-claim-service/scripts/7s_multijob.js`
+- `tps`
+  - 不走 Docker，直接本地执行 `zk-claim-service/scripts/h_TPSjob.js`
+
+## 配置文件
+
+建议从 [config.deploy.example.yaml](/Users/dayong/myspace/mywork/ydyl-deployment-suite/ydyl-deploy-client/config.deploy.example.yaml:1) 开始。
+
+关键配置包括：
+
+- AWS / EC2 基本参数
+  - `region`
+  - `securityGroupId`
+  - `diskSizeGiB`
+  - `keyName`
+- SSH 与输出
+  - `sshUser`
+  - `sshKeyDir`
+  - `logDir`
+  - `outputDir`
+- L1 通用配置
+  - `l1ChainId`
+  - `l1RpcUrl`
+  - `l1RpcUrlWs`
+  - `l1BridgeHubContract`
+  - `l1RegisterBridgePrivateKey`
+- 服务列表
+  - `services[].type`
+  - `services[].count`
+  - `services[].ami`
+  - `services[].instanceType`
+  - `services[].tagPrefix`
+  - `services[].remoteCmd`
+
+当前支持的服务类型主要包括：
+
+- `op`
+- `cdk`
+- `xjst`
+- `generic`
+
+## 输出文件说明
+
+部署阶段：
+
+- `output/servers_create.json`
+  - 创建实例后拿到的原始候选服务器快照
+- `output/servers.json`
+  - 当前参与部署 / 后续操作的服务器列表
+- `output/script_status.json`
+  - 远程脚本执行状态，供恢复和同步使用
+- `output/ssh_scripts.json`
+  - 远程执行脚本记录
+
+压测配置阶段：
+
+- `output/jobs/all.json`
+  - 全量跨链 jobs，适合 `h_TPSjob.js`
+- `output/jobs/1.json ~ 8.json`
+  - 拆分后的 job 文件，适合并行发送
+
+## 建议
+
+- `deploy` 完成后先确认 `ydyl-console-service` 可从各节点访问，否则 `gen-cross-tx-config` 会失败
+- `servers.json` 和 `output/jobs/` 建议保留一份归档，便于复现实验
+- 如果需要重跑压测但不重建 EC2，优先复用已有 `servers.json` 和 jobs 输出
