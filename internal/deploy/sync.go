@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -19,6 +20,12 @@ type Sync struct {
 	cfg       CommonConfig
 	outputMgr *OutputManager
 }
+
+const (
+	syncLoopInterval                    = 5 * time.Second
+	syncNoGrowthTerminalCheckRounds     = 6
+	syncStatusJudgeLocalLogTailMaxBytes = 256 * 1024
+)
 
 func NewSync(cfg CommonConfig, mgr *OutputManager) *Sync {
 	if mgr == nil {
@@ -91,6 +98,8 @@ func (m *Sync) Run(ctx context.Context) error {
 			var offset int64 = st.LogSize
 			// 连续拉取远端日志失败次数；达到阈值才判定失败，避免短暂网络抖动导致误判。
 			consecutiveLogFetchFailures := 0
+			// 连续无日志增量次数：用于兜底处理“日志已结束但 PID 仍存活”的场景。
+			noGrowthRounds := 0
 
 			for {
 				select {
@@ -136,7 +145,7 @@ func (m *Sync) Run(ctx context.Context) error {
 						muErr.Unlock()
 						return
 					}
-					time.Sleep(5 * time.Second)
+					time.Sleep(syncLoopInterval)
 					continue
 				} else {
 					consecutiveLogFetchFailures = 0
@@ -145,6 +154,9 @@ func (m *Sync) Run(ctx context.Context) error {
 							log.Printf("[%s] 写入本地日志失败 %s: %v\n", st.IP, localLogPath, writeErr)
 						}
 						offset = newSize
+						noGrowthRounds = 0
+					} else {
+						noGrowthRounds++
 					}
 				}
 
@@ -167,6 +179,40 @@ func (m *Sync) Run(ctx context.Context) error {
 				}
 
 				if running {
+					if noGrowthRounds >= syncNoGrowthTerminalCheckRounds {
+						status, reason, decided, judgeErr := deriveTerminalStatusFromLocalLog(localLogPath, st)
+						if judgeErr != nil && !os.IsNotExist(judgeErr) {
+							log.Printf("[%s] 读取本地日志尾部失败(%s): %v\n", st.IP, localLogPath, judgeErr)
+						}
+						if decided {
+							log.Printf("[%s] 进程(pid=%d)仍在运行，但日志连续 %d 轮无增量且已出现终态标记，按日志判定为 %s\n", st.IP, st.PID, noGrowthRounds, status)
+							_ = m.outputMgr.UpdateStatus(st.IP, st.ServiceType, func(s *ScriptStatus) {
+								s.Status = status
+								s.Reason = reason
+								s.UpdatedAt = now
+								if s.LocalLog == "" {
+									s.LocalLog = localLogPath
+								}
+								s.LogSize = offset
+							})
+							if status == "failed" {
+								muErr.Lock()
+								if first == nil {
+									first = fmt.Errorf("远程脚本执行失败: ip=%s serviceType=%s: %s", st.IP, st.ServiceType, reason)
+								}
+								muErr.Unlock()
+							}
+							if status == "success" {
+								name := st.Name
+								if name == "" {
+									name = fmt.Sprintf("%s-%s", st.ServiceType, st.IP)
+								}
+								log.Printf("✅ 链部署成功: serviceType=%s, name=%s, ip=%s\n", st.ServiceType, name, st.IP)
+							}
+							return
+						}
+					}
+
 					// 仍在运行，更新更新时间即可
 					_ = m.outputMgr.UpdateStatus(st.IP, st.ServiceType, func(s *ScriptStatus) {
 						s.Status = "running"
@@ -201,6 +247,18 @@ func (m *Sync) Run(ctx context.Context) error {
 						logData = append(logData, finalData...)
 					}
 
+					// 进程已结束但最后一轮没有新增日志时，回退读取本地日志尾部再判定，避免因空数据误判。
+					if len(logData) == 0 {
+						tailData, tailErr := readFileTail(localLogPath, syncStatusJudgeLocalLogTailMaxBytes)
+						if tailErr != nil {
+							if !os.IsNotExist(tailErr) {
+								log.Printf("[%s] 读取本地日志尾部失败(%s): %v\n", st.IP, localLogPath, tailErr)
+							}
+						} else if len(tailData) > 0 {
+							logData = tailData
+						}
+					}
+
 					// 根据最新的日志内容尽量推断成功 / 失败
 					status, reason := deriveStatusFromLog(logData, st)
 					_ = m.outputMgr.UpdateStatus(st.IP, st.ServiceType, func(s *ScriptStatus) {
@@ -231,7 +289,7 @@ func (m *Sync) Run(ctx context.Context) error {
 					return
 				}
 
-				time.Sleep(5 * time.Second)
+				time.Sleep(syncLoopInterval)
 			}
 		}(st)
 	}
@@ -337,8 +395,12 @@ func checkRemoteProcess(ctx context.Context, user, keyPath, ip string, pid int) 
 		"-o", "LogLevel=ERROR",
 		"-i", keyPath,
 		fmt.Sprintf("%s@%s", user, ip),
-		fmt.Sprintf("ps -p %d -o pid=", pid),
+		fmt.Sprintf("ps -p %d -o stat=", pid),
 	)
+
+	var stdout bytes.Buffer
+	sshCmd.Stdout = &stdout
+	sshCmd.Stderr = &stdout
 
 	if err := sshCmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
@@ -347,7 +409,95 @@ func checkRemoteProcess(ctx context.Context, user, keyPath, ip string, pid int) 
 		}
 		return false, err
 	}
+
+	state := strings.TrimSpace(stdout.String())
+	if state == "" {
+		return false, nil
+	}
+	fields := strings.Fields(state)
+	if len(fields) == 0 {
+		return false, nil
+	}
+	if strings.HasPrefix(fields[0], "Z") {
+		// zombie 进程已退出执行，不应继续视作 running。
+		return false, nil
+	}
 	return true, nil
+}
+
+func deriveTerminalStatusFromLocalLog(localLogPath string, st *ScriptStatus) (status string, reason string, decided bool, err error) {
+	if strings.TrimSpace(localLogPath) == "" {
+		return "", "", false, nil
+	}
+
+	data, err := readFileTail(localLogPath, syncStatusJudgeLocalLogTailMaxBytes)
+	if err != nil {
+		return "", "", false, err
+	}
+	if len(data) == 0 {
+		return "", "", false, nil
+	}
+
+	status, reason, decided = detectTerminalStatusFromLog(data, st)
+	return status, reason, decided, nil
+}
+
+func detectTerminalStatusFromLog(data []byte, st *ScriptStatus) (status string, reason string, decided bool) {
+	s := stripXTraceLines(string(data))
+
+	if st != nil && strings.Contains(strings.ToLower(st.ServiceType), "cdk") {
+		if strings.Contains(s, "cdk_pipe.sh 执行失败") {
+			return "failed", "cdk_pipe.sh 日志中包含失败信息，请查看详细日志", true
+		}
+		if strings.Contains(s, "所有步骤完成") {
+			return "success", "", true
+		}
+		return "", "", false
+	}
+
+	if strings.Contains(s, "所有步骤完成") {
+		return "success", "", true
+	}
+
+	return "", "", false
+}
+
+func readFileTail(path string, maxBytes int64) ([]byte, error) {
+	if strings.TrimSpace(path) == "" || maxBytes <= 0 {
+		return nil, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := info.Size()
+	if size <= 0 {
+		return nil, nil
+	}
+
+	readSize := size
+	if readSize > maxBytes {
+		readSize = maxBytes
+	}
+
+	if _, err := f.Seek(size-readSize, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, readSize)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+
+	return buf[:n], nil
 }
 
 // deriveStatusFromLog 尝试根据日志内容推断脚本执行结果。
