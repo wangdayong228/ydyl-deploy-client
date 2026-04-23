@@ -207,7 +207,7 @@ func (m *Sync) Run(ctx context.Context) error {
 								if name == "" {
 									name = fmt.Sprintf("%s-%s", st.ServiceType, st.IP)
 								}
-								log.Printf("✅ 链部署成功: serviceType=%s, name=%s, ip=%s\n", st.ServiceType, name, st.IP)
+								log.Printf("✅ 链节点部署成功: serviceType=%s, name=%s, ip=%s\n", st.ServiceType, name, st.IP)
 							}
 							return
 						}
@@ -283,7 +283,7 @@ func (m *Sync) Run(ctx context.Context) error {
 						if name == "" {
 							name = fmt.Sprintf("%s-%s", st.ServiceType, st.IP)
 						}
-						log.Printf("✅ 链部署成功: serviceType=%s, name=%s, ip=%s\n", st.ServiceType, name, st.IP)
+						log.Printf("✅ 链节点部署成功: serviceType=%s, name=%s, ip=%s\n", st.ServiceType, name, st.IP)
 					}
 
 					return
