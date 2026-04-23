@@ -16,13 +16,12 @@ var (
 func init() {
 	cmd := &cobra.Command{
 		Use:   "tps",
-		Short: "监控跨链交易 TPS（h_TPSjob.js）",
-		Long:  "读取 gen-cross-tx-config 生成的 jobs 配置文件，进入 zk-claim-service 目录执行 node scripts/h_TPSjob.js <config>，等待 hash.json 文件并持续输出 TPS。",
+		Short: "启动跨链交易 TPS Docker Compose service",
+		Long:  "进入 ../ydyl-bench-docker 执行 docker compose up --build tps；如传入 --config，则先校验其与 ydyl-deploy-client/output/jobs/all.json JSON 内容一致。",
 		RunE:  runTPS,
 	}
 
-	cmd.Flags().StringVar(&tpsConfigPath, "config", "", "jobs 配置文件路径（gen-cross-tx-config 的输出 JSON，必填）")
-	_ = cmd.MarkFlagRequired("config")
+	cmd.Flags().StringVar(&tpsConfigPath, "config", "", "jobs 配置文件路径（可选；传入时会与 output/jobs/all.json 做 JSON 内容校验）")
 
 	rootCmd.AddCommand(cmd)
 }

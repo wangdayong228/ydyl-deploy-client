@@ -10,22 +10,18 @@ import (
 )
 
 var (
-	benchCrossTxConfigPath  string
-	benchCrossTxConcurrency int
+	benchCrossTxConfigPath string
 )
 
 func init() {
 	cmd := &cobra.Command{
 		Use:   "bench-cross-tx",
-		Short: "执行跨链压测交易脚本（7s_multijob.js）",
-		Long:  "读取 gen-cross-tx-config 生成的 jobs 配置文件，进入 zk-claim-service 目录执行 node scripts/7s_multijob.js <config> 发送跨链交易。",
+		Short: "启动跨链压测 Docker Compose services",
+		Long:  "进入 ../ydyl-bench-docker 执行 docker compose up --build multijob-1..8；如传入 --config，则先校验其与 ydyl-deploy-client/output/jobs/all.json JSON 内容一致。",
 		RunE:  runBenchCrossTx,
 	}
 
-	cmd.Flags().StringVar(&benchCrossTxConfigPath, "config", "", "jobs 配置文件路径（gen-cross-tx-config 的输出 JSON）")
-	_ = cmd.MarkFlagRequired("config")
-
-	cmd.Flags().IntVar(&benchCrossTxConcurrency, "concurrency", 50, "并发数（透传到环境变量 CONCURRENCY）")
+	cmd.Flags().StringVar(&benchCrossTxConfigPath, "config", "", "jobs 配置文件路径（可选；传入时会与 output/jobs/all.json 做 JSON 内容校验）")
 
 	rootCmd.AddCommand(cmd)
 }
@@ -35,8 +31,7 @@ func runBenchCrossTx(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	if err := crosstxbench.DefaultBench().Run(ctx, crosstxbench.Params{
-		ConfigPath:  benchCrossTxConfigPath,
-		Concurrency: benchCrossTxConcurrency,
+		ConfigPath: benchCrossTxConfigPath,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "bench-cross-tx 失败：", err)
 		return err

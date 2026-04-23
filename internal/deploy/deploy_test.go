@@ -146,7 +146,7 @@ func TestRotateOutputAndLogs_ShareSameTimestamp(t *testing.T) {
 		t.Fatalf("write script_status.json failed: %v", err)
 	}
 
-	fixed := time.Date(2026, 3, 4, 12, 34, 56, 0, time.UTC)
+	fixed := time.Date(2026, 3, 4, 12, 34, 56, 0, time.Local)
 	if err := os.Chtimes(statusPath, fixed, fixed); err != nil {
 		t.Fatalf("chtimes script_status.json failed: %v", err)
 	}
@@ -155,8 +155,9 @@ func TestRotateOutputAndLogs_ShareSameTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveDeployArchiveTimestamp failed: %v", err)
 	}
-	if ts != "20260304-123456" {
-		t.Fatalf("unexpected ts: got=%s", ts)
+	wantTS := fixed.Format("20060102-150405")
+	if ts != wantTS {
+		t.Fatalf("unexpected ts: got=%s want=%s", ts, wantTS)
 	}
 
 	rotatedOutput, err := rotateExistingDirWithTimestamp(outputDir, ts)

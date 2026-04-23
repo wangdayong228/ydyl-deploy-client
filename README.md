@@ -98,6 +98,7 @@ go run . gen-cross-tx-config \
 - `output/jobs/2.json`
 - ...
 - `output/jobs/8.json`
+- 当前执行目录下的 `7s_jobs.gen.json`（与 `output/jobs/all.json` 内容完全一致）
 
 常用参数：
 
@@ -126,11 +127,11 @@ go run . gen-cross-tx-config \
 当 `deploy` 和 `gen-cross-tx-config` 都完成后，通常直接启动 Docker 压测：
 
 ```bash
-cd ../ydyl-bench-docker
-docker-compose up --build
+go run . bench-cross-tx --config ./7s_jobs.gen.json
+go run . tps --config ./7s_jobs.gen.json
 ```
 
-这会启动：
+这两个命令会进入 `../ydyl-bench-docker` 启动 Docker Compose service；如果传入 `--config`，会先校验该文件与 `ydyl-deploy-client/output/jobs/all.json` 的 JSON 内容一致。不传 `--config` 时跳过该校验。
 
 - `multijob-1` 到 `multijob-8`
 - `tps`
@@ -151,9 +152,9 @@ docker-compose up --build
 - `shutdown`
   - 按 `servers.json` 对远端机器执行关机
 - `bench-cross-tx`
-  - 不走 Docker，直接本地执行 `zk-claim-service/scripts/7s_multijob.js`
+  - 校验 jobs JSON 后执行 `docker compose up --build multijob-1 ... multijob-8`
 - `tps`
-  - 不走 Docker，直接本地执行 `zk-claim-service/scripts/h_TPSjob.js`
+  - 校验 jobs JSON 后执行 `docker compose up --build tps`
 
 ## 配置文件
 

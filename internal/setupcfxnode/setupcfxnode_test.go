@@ -2,6 +2,7 @@ package setupcfxnode
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,12 +14,7 @@ import (
 func TestSetup_Run_Success(t *testing.T) {
 	root := t.TempDir()
 	cfgPath := filepath.Join(root, "config.deploy.yaml")
-	cfg := `
-region: us-west-2
-l1RpcUrl: https://example-rpc.local
-l1VaultMnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-services: []
-`
+	cfg := setupTestConfigYAML("https://example-rpc.local")
 	mustNoErr(t, os.WriteFile(cfgPath, []byte(cfg), 0o644))
 
 	var got oscmdexec.Spec
@@ -62,12 +58,7 @@ services: []
 func TestSetup_Run_EmptyL1RPCURL(t *testing.T) {
 	root := t.TempDir()
 	cfgPath := filepath.Join(root, "config.deploy.yaml")
-	cfg := `
-region: us-west-2
-l1RpcUrl: ""
-l1VaultMnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-services: []
-`
+	cfg := setupTestConfigYAML("")
 	mustNoErr(t, os.WriteFile(cfgPath, []byte(cfg), 0o644))
 
 	called := false
@@ -87,6 +78,33 @@ services: []
 	if called {
 		t.Fatalf("配置校验失败时不应执行 runner")
 	}
+}
+
+func setupTestConfigYAML(l1RPCURL string) string {
+	return fmt.Sprintf(`
+region: us-west-2
+securityGroupId: sg-test
+diskSizeGiB: 100
+runDuration: 1h
+sshUser: ec2-user
+sshKeyDir: ""
+sshMaxConcurrency: 4
+sshReadyRetryCount: 3
+sshReadyRetryInterval: 1s
+keyName: test-key
+logDir: logs
+outputDir: output
+l1ChainId: "11155111"
+l1RpcUrl: %q
+l1RpcUrlWs: wss://example-rpc.local/ws
+l1VaultMnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+l1BridgeHubContract: "0x00000000000000000000000000000000000000ff"
+l1RegisterBridgePrivateKey: "0x1111111111111111111111111111111111111111111111111111111111111111"
+dryRun: true
+forceDeployL2Chain: false
+enableGenAccounts: false
+services: []
+`, l1RPCURL)
 }
 
 func envValue(env []string, key string) string {

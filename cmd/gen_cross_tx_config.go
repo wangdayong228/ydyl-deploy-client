@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ var (
 	genCrossTxBlockRange        int64
 	genCrossTxWalletAmount      int
 )
+
+const generatedJobsConfigFilename = "7s_jobs.gen.json"
 
 func init() {
 	cmd := &cobra.Command{
@@ -64,6 +67,28 @@ func runGenCrossTxConfig(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("已生成 %d 条 job（链=%v），输出到 %s\n", res.JobsCount, res.Chains, res.OutPath)
+	copiedPath, err := copyGeneratedJobsConfig(res.OutPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("已生成 %d 条 job（链=%v），输出到 %s，并复制到 %s\n", res.JobsCount, res.Chains, res.OutPath, copiedPath)
 	return nil
+}
+
+func copyGeneratedJobsConfig(sourcePath string) (string, error) {
+	b, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("读取 all.json 失败: %w", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("获取当前目录失败: %w", err)
+	}
+	destPath := filepath.Join(wd, generatedJobsConfigFilename)
+	if err := os.WriteFile(destPath, b, 0o644); err != nil {
+		return "", fmt.Errorf("写出 %s 失败: %w", generatedJobsConfigFilename, err)
+	}
+	return destPath, nil
 }
