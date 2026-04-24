@@ -41,3 +41,55 @@ func TestEcdsaPrivToWeb3Hex_RandomKey_Format(t *testing.T) {
 	}
 }
 
+func TestBuildDeterministicPrivateKey_UsesChainIDForEVM(t *testing.T) {
+	got, err := BuildDeterministicPrivateKey(999, 324, big.NewInt(42), 0)
+	if err != nil {
+		t.Fatalf("BuildDeterministicPrivateKey error: %v", err)
+	}
+
+	want := "0x000000000000000000000000000000000000000001440000000000000000002a"
+	if got != want {
+		t.Fatalf("deterministic key mismatch, got=%s want=%s", got, want)
+	}
+}
+
+func TestBuildDeterministicPrivateKey_UsesGroupIDForXJST(t *testing.T) {
+	got, err := BuildDeterministicPrivateKey(77, 324, big.NewInt(42), 2)
+	if err != nil {
+		t.Fatalf("BuildDeterministicPrivateKey error: %v", err)
+	}
+
+	want := "0x0000000000000000000000000000000000000000004d0000000000000000002a"
+	if got != want {
+		t.Fatalf("deterministic key mismatch, got=%s want=%s", got, want)
+	}
+}
+
+func TestBuildDeterministicPrivateKey_Format(t *testing.T) {
+	got, err := BuildDeterministicPrivateKey(0, 1, big.NewInt(1), 1)
+	if err != nil {
+		t.Fatalf("BuildDeterministicPrivateKey error: %v", err)
+	}
+
+	if len(got) != 66 {
+		t.Fatalf("unexpected key length: got=%d value=%s", len(got), got)
+	}
+	if got[:2] != "0x" {
+		t.Fatalf("missing 0x prefix: %s", got)
+	}
+}
+
+func TestBuildDeterministicPrivateKey_RejectsZeroKey(t *testing.T) {
+	_, err := BuildDeterministicPrivateKey(0, 0, big.NewInt(0), 0)
+	if err == nil {
+		t.Fatal("expected zero private key error")
+	}
+}
+
+func TestBuildDeterministicPrivateKey_RejectsTooLargeIndex(t *testing.T) {
+	tooLarge := new(big.Int).Lsh(big.NewInt(1), 80)
+	_, err := BuildDeterministicPrivateKey(0, 1, tooLarge, 0)
+	if err == nil {
+		t.Fatal("expected index overflow error")
+	}
+}

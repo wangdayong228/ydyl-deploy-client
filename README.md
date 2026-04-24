@@ -155,6 +155,18 @@ go run . tps --config ./7s_jobs.gen.json
   - 校验 jobs JSON 后执行 `docker compose up --build multijob-1 ... multijob-8`
 - `tps`
   - 校验 jobs JSON 后执行 `docker compose up --build tps`
+- `gen-private-key`
+  - 按 `ydyl-gen-accounts` 的 deterministic 规则生成私钥；`l2type=0/1` 使用 `chainID`，`l2type=2` 使用 `groupID`
+
+示例：
+
+```bash
+# EVM 链：使用 chainID
+go run . gen-private-key --chainID 324 --index 42 --l2type 0
+
+# XJST：使用 groupID
+go run . gen-private-key --groupID 77 --index 42 --l2type 2
+```
 
 ## 配置文件
 
