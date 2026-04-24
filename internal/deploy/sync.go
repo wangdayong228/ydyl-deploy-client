@@ -81,7 +81,7 @@ func (m *Sync) Run(ctx context.Context) error {
 	)
 
 	for _, st := range statuses {
-		if st == nil || st.Status != "running" || st.PID <= 0 || st.LogPath == "" {
+		if st == nil || !shouldMonitorSyncStatus(st.Status) || st.PID <= 0 || st.LogPath == "" {
 			continue
 		}
 
@@ -259,8 +259,9 @@ func (m *Sync) Run(ctx context.Context) error {
 						}
 					}
 
-					// 根据最新的日志内容尽量推断成功 / 失败
-					status, reason := deriveStatusFromLog(logData, st)
+					// 根据最新的日志内容推断成功 / 失败。
+					// unknown 的策略更严格：进程已结束且未命中成功标志则判定为 failed。
+					status, reason := deriveStatusForCompletedProcess(logData, st)
 					_ = m.outputMgr.UpdateStatus(st.IP, st.ServiceType, func(s *ScriptStatus) {
 						s.Status = status
 						s.Reason = reason
@@ -500,6 +501,29 @@ func readFileTail(path string, maxBytes int64) ([]byte, error) {
 	return buf[:n], nil
 }
 
+func shouldMonitorSyncStatus(status string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	return normalized == "running" || normalized == "unknown"
+}
+
+func deriveStatusForCompletedProcess(data []byte, st *ScriptStatus) (status string, reason string) {
+	if st != nil && strings.EqualFold(strings.TrimSpace(st.Status), "unknown") {
+		return deriveStatusFromUnknownLog(data, st)
+	}
+	return deriveStatusFromLog(data, st)
+}
+
+func deriveStatusFromUnknownLog(data []byte, st *ScriptStatus) (status string, reason string) {
+	status, reason, decided := detectTerminalStatusFromLog(data, st)
+	if decided {
+		if status == "success" {
+			return "success", ""
+		}
+		return "failed", reason
+	}
+	return "failed", "unknown 状态进程已结束，日志未命中成功标志，按失败处理"
+}
+
 // deriveStatusFromLog 尝试根据日志内容推断脚本执行结果。
 // 这里 data 一般是日志的最新一段（不是全量），对于 cdk 脚本足够判断成功/失败。
 func deriveStatusFromLog(data []byte, st *ScriptStatus) (status string, reason string) {
@@ -524,7 +548,7 @@ func deriveStatusFromLog(data []byte, st *ScriptStatus) (status string, reason s
 		return "success", ""
 	}
 
-	return "failed", "日志中包含错误关键词，请查看详细日志"
+	return "failed", "日志未出现成功标记，请查看详细日志"
 }
 
 func containsAny(s string, subs []string) bool {

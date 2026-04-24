@@ -27,7 +27,7 @@ type ScriptStatus struct {
 	Command string `json:"command,omitempty"`
 
 	PID       int    `json:"pid"`
-	Status    string `json:"status"`              // running / success / failed / unknown
+	Status    string `json:"status"`              // pending / running / success / failed / unknown
 	Reason    string `json:"reason,omitempty"`    // 失败或未知时的原因描述
 	LogPath   string `json:"logPath,omitempty"`   // 远端日志路径
 	LocalLog  string `json:"localLog,omitempty"`  // 本地同步日志路径

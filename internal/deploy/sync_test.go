@@ -108,3 +108,57 @@ func TestDeriveTerminalStatusFromLocalLog(t *testing.T) {
 		t.Fatalf("unexpected terminal status: status=%q reason=%q", status, reason)
 	}
 }
+
+func TestShouldMonitorSyncStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status string
+		want   bool
+	}{
+		{status: "running", want: true},
+		{status: "unknown", want: true},
+		{status: "success", want: false},
+		{status: "failed", want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldMonitorSyncStatus(tt.status); got != tt.want {
+				t.Fatalf("shouldMonitorSyncStatus(%q)=%v, want=%v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeriveStatusForCompletedProcess_UnknownWithoutSuccessMarkerIsFailed(t *testing.T) {
+	t.Parallel()
+
+	status, reason := deriveStatusForCompletedProcess([]byte("still running without marker"), &ScriptStatus{
+		ServiceType: "op",
+		Status:      "unknown",
+	})
+	if status != "failed" {
+		t.Fatalf("unexpected status: got=%q want=failed", status)
+	}
+	if reason == "" {
+		t.Fatalf("unexpected reason: empty")
+	}
+}
+
+func TestDeriveStatusForCompletedProcess_UnknownWithSuccessMarkerIsSuccess(t *testing.T) {
+	t.Parallel()
+
+	status, reason := deriveStatusForCompletedProcess([]byte("line1\n所有步骤完成\n"), &ScriptStatus{
+		ServiceType: "op",
+		Status:      "unknown",
+	})
+	if status != "success" {
+		t.Fatalf("unexpected status: got=%q want=success", status)
+	}
+	if reason != "" {
+		t.Fatalf("unexpected reason: got=%q want empty", reason)
+	}
+}

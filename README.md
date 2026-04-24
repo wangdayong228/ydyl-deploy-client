@@ -216,7 +216,31 @@ go run . gen-private-key --groupID 77 --index 42 --l2type 2
 - `output/script_status.json`
   - 远程脚本执行状态，供恢复和同步使用
 - `output/ssh_scripts.json`
-  - 远程执行脚本记录
+  - SSH 就绪探测记录（成功/失败、尝试次数、失败原因）
+
+### `script_status.json` 的 `status` 枚举说明
+
+- `pending`
+  - 机器已通过 SSH 可用性收敛，命令已预写入 `script_status.json`，但远端命令尚未真正启动
+  - 由 `preRegisterStatuses -> UpsertPlannedStatus` 写入
+- `running`
+  - 远端命令启动成功并拿到 PID 后进入运行中
+  - `sync` 轮询时如果进程仍存活，会持续刷新为该状态
+  - `deploy-restore` 重新拉起任务后也会重置为该状态
+- `success`
+  - 同步阶段根据日志判定成功（当前核心成功标记为 `所有步骤完成`）
+- `failed`
+  - 日志同步连续失败达到阈值（当前为连续 10 次）
+  - 或日志判定失败（例如 CDK 日志出现 `cdk_pipe.sh 执行失败`）
+  - 或非 CDK 场景下进程结束且未命中成功标记
+- `unknown`
+  - 仅 CDK 场景：进程结束后日志既未命中成功标记，也未命中失败标记
+  - 表示状态无法自动确认，需要人工查看日志
+
+补充说明：
+
+- `deploy` 的自动重试只会选择 `failed` 状态的 IP 进入 `deploy-restore`
+- `success` 不会参与恢复；`pending/running/unknown` 默认也不会被 `deploy` 自动重试直接选中
 
 压测配置阶段：
 

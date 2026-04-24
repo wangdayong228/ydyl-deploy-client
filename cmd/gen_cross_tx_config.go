@@ -38,9 +38,9 @@ func init() {
 
 	cmd.Flags().StringVar(&genCrossTxOutPath, "out", "", "输出根目录（将生成到 <out>/jobs/all.json 与 <out>/jobs/1..N.json；不传则默认使用 servers 所在目录）")
 	cmd.Flags().IntVar(&genCrossTxPartNumber, "part-number", 8, "jobs 拆分份数（将生成 jobs/1.json ~ jobs/N.json）")
-	cmd.Flags().IntVar(&genCrossTxTxAmountPerWallet, "tx-amount-per-wallet", 1000, "tx_amount_per_wallet：每个 wallet 发送交易数量")
-	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 10, "wallet_amount：每个 job 发送的 wallet 数量")
-	cmd.Flags().Int64Var(&genCrossTxBlockRange, "block-range", 100000, "block_range：查询区块范围")
+	cmd.Flags().IntVar(&genCrossTxTxAmountPerWallet, "tx-amount-per-wallet", 500, "tx_amount_per_wallet：每个 wallet 发送交易数量")
+	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 100, "wallet_amount：每个 job 发送的 wallet 数量")
+	cmd.Flags().Int64Var(&genCrossTxBlockRange, "block-range", 300, "block_range：查询区块范围")
 
 	rootCmd.AddCommand(cmd)
 }

@@ -17,7 +17,7 @@ func init() {
 	cmd := &cobra.Command{
 		Use:   "deploy-restore",
 		Short: "基于已有 output/script_status.json 的任务状态重新执行部署命令",
-		Long:  "deploy-restore 命令不会重新创建 EC2 实例，而是从 output/script_status.json 读取可恢复任务（默认恢复非 success，包含 failed/pending 等）并在这些机器上执行远程部署命令，同时继续同步日志与脚本状态。",
+		Long:  "deploy-restore 命令不会重新创建 EC2 实例，而是从 output/script_status.json 恢复任务：默认仅重跑 failed/pending；running/unknown 仅做 sync（unknown 会在 sync 中基于 PID 与日志判定终态）；指定 --ips 时对命中的 IP 强制重跑（需 command 非空）。",
 		RunE:  runDeployRestore,
 	}
 

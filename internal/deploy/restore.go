@@ -29,8 +29,8 @@ func NewRestorer(cfg CommonConfig, mgr *OutputManager) *Restorer {
 	}
 }
 
-// Restore 基于已有的 output/script_status.json 中的服务器列表与命令，
-// 重新在这些机器上执行部署脚本。不会重新创建 EC2 实例，只依赖 CommonConfig 与脚本状态文件。
+// Restore 基于已有的 output/script_status.json 中的服务器列表与命令恢复任务。
+// 不会重新创建 EC2 实例，只依赖 CommonConfig 与脚本状态文件。
 func Restore(ctx context.Context, commonCfg CommonConfig, targetIPs []string) error {
 	log.Printf("👉 开始恢复，配置: %+v\n", commonCfg)
 
@@ -47,21 +47,28 @@ func Restore(ctx context.Context, commonCfg CommonConfig, targetIPs []string) er
 		return fmt.Errorf("加载输出状态失败: %w", err)
 	}
 
-	// 从 script_status.json 中恢复服务器列表与命令。
-	// 这里会恢复所有非 success 任务：failed / pending / unknown 等。
 	statuses := outputMgr.SnapshotStatuses()
 	if len(statuses) == 0 {
 		return fmt.Errorf("在输出目录 %s 中未找到任何脚本状态信息（script_status.json 为空或不存在）", commonCfg.OutputDir)
 	}
 
-	filteredStatuses, err := filterStatusesByIPs(statuses, targetIPs)
+	cleanedTargetIPs := sanitizeTargetIPs(targetIPs)
+	scopedStatuses, err := filterStatusesByIPs(statuses, cleanedTargetIPs)
 	if err != nil {
 		return err
 	}
-	log.Printf("👉 [restore] 待恢复候选任务数: %d\n", len(filteredStatuses))
+	forceRestart := len(cleanedTargetIPs) > 0
+	restartCandidates := filterRestoreCommandCandidates(scopedStatuses, forceRestart)
+	log.Printf("👉 [restore] 当前作用域任务数: %d，待重跑任务数: %d，forceRestart=%t\n", len(scopedStatuses), len(restartCandidates), forceRestart)
+
+	if len(restartCandidates) == 0 {
+		log.Println("👉 [restore] 无需重跑任务，仅执行日志与状态同步...")
+		s := NewSync(commonCfg, outputMgr)
+		return s.Run(ctx)
+	}
 
 	restorer := NewRestorer(commonCfg, outputMgr)
-	return restorer.Run(ctx, filteredStatuses)
+	return restorer.Run(ctx, restartCandidates)
 }
 
 func sanitizeTargetIPs(targetIPs []string) []string {
@@ -89,7 +96,7 @@ func sanitizeTargetIPs(targetIPs []string) []string {
 func filterStatusesByIPs(statuses []*ScriptStatus, targetIPs []string) ([]*ScriptStatus, error) {
 	cleanedIPs := sanitizeTargetIPs(targetIPs)
 	if len(cleanedIPs) == 0 {
-		return filterNonSuccessStatuses(statuses), nil
+		return compactStatuses(statuses), nil
 	}
 
 	existingIPs := make(map[string]struct{}, len(statuses))
@@ -128,7 +135,18 @@ func filterStatusesByIPs(statuses []*ScriptStatus, targetIPs []string) ([]*Scrip
 	return filtered, nil
 }
 
-func filterNonSuccessStatuses(statuses []*ScriptStatus) []*ScriptStatus {
+func compactStatuses(statuses []*ScriptStatus) []*ScriptStatus {
+	filtered := make([]*ScriptStatus, 0, len(statuses))
+	for _, st := range statuses {
+		if st == nil {
+			continue
+		}
+		filtered = append(filtered, st)
+	}
+	return filtered
+}
+
+func filterRestoreCommandCandidates(statuses []*ScriptStatus, forceRestart bool) []*ScriptStatus {
 	filtered := make([]*ScriptStatus, 0, len(statuses))
 	for _, st := range statuses {
 		if st == nil {
@@ -137,10 +155,15 @@ func filterNonSuccessStatuses(statuses []*ScriptStatus) []*ScriptStatus {
 		if strings.TrimSpace(st.Command) == "" {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(st.Status), "success") {
+		if forceRestart {
+			filtered = append(filtered, st)
 			continue
 		}
-		filtered = append(filtered, st)
+
+		status := strings.ToLower(strings.TrimSpace(st.Status))
+		if status == "failed" || status == "pending" {
+			filtered = append(filtered, st)
+		}
 	}
 	return filtered
 }

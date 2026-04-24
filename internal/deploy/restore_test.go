@@ -2,7 +2,7 @@ package deploy
 
 import "testing"
 
-func TestFilterStatusesByIPs_WithoutTargetIPs_OnlyNonSuccess(t *testing.T) {
+func TestFilterStatusesByIPs_WithoutTargetIPs_KeepAllNonNilStatuses(t *testing.T) {
 	statuses := []*ScriptStatus{
 		{IP: "1.1.1.1", Status: "success", Command: "echo 1"},
 		{IP: "2.2.2.2", Status: "running", Command: "echo 2"},
@@ -17,11 +17,11 @@ func TestFilterStatusesByIPs_WithoutTargetIPs_OnlyNonSuccess(t *testing.T) {
 		t.Fatalf("filterStatusesByIPs returned error: %v", err)
 	}
 
-	if len(filtered) != 3 {
-		t.Fatalf("unexpected filtered count: got=%d want=3", len(filtered))
+	if len(filtered) != 5 {
+		t.Fatalf("unexpected filtered count: got=%d want=5", len(filtered))
 	}
 
-	if filtered[0].IP != "2.2.2.2" || filtered[1].IP != "3.3.3.3" || filtered[2].IP != "4.4.4.4" {
+	if filtered[0].IP != "1.1.1.1" || filtered[1].IP != "2.2.2.2" || filtered[2].IP != "3.3.3.3" || filtered[3].IP != "4.4.4.4" || filtered[4].IP != "5.5.5.5" {
 		t.Fatalf("unexpected filtered result: %+v", filtered)
 	}
 }
@@ -38,11 +38,11 @@ func TestFilterStatusesByIPs_WithoutSpecifiedIPs_BlankValuesTreatedAsUnset(t *te
 		t.Fatalf("filterStatusesByIPs returned error: %v", err)
 	}
 
-	if len(filtered) != 1 {
-		t.Fatalf("unexpected filtered count: got=%d want=1", len(filtered))
+	if len(filtered) != 3 {
+		t.Fatalf("unexpected filtered count: got=%d want=3", len(filtered))
 	}
-	if filtered[0].IP != "2.2.2.2" {
-		t.Fatalf("unexpected filtered IP: got=%s want=2.2.2.2", filtered[0].IP)
+	if filtered[0].IP != "1.1.1.1" || filtered[1].IP != "2.2.2.2" || filtered[2].IP != "3.3.3.3" {
+		t.Fatalf("unexpected filtered result: %+v", filtered)
 	}
 }
 
@@ -62,5 +62,45 @@ func TestFilterStatusesByIPs_WithTargetIPs_KeepSpecifiedIPs(t *testing.T) {
 	}
 	if filtered[0].IP != "1.1.1.1" {
 		t.Fatalf("unexpected filtered IP: got=%s want=1.1.1.1", filtered[0].IP)
+	}
+}
+
+func TestFilterRestoreCommandCandidates_DefaultOnlyFailedAndPending(t *testing.T) {
+	statuses := []*ScriptStatus{
+		{IP: "1.1.1.1", Status: "success", Command: "echo 1"},
+		{IP: "2.2.2.2", Status: "failed", Command: "echo 2"},
+		{IP: "3.3.3.3", Status: "pending", Command: "echo 3"},
+		{IP: "4.4.4.4", Status: "running", Command: "echo 4"},
+		{IP: "5.5.5.5", Status: "unknown", Command: "echo 5"},
+		{IP: "6.6.6.6", Status: "failed", Command: ""},
+		nil,
+	}
+
+	filtered := filterRestoreCommandCandidates(statuses, false)
+	if len(filtered) != 2 {
+		t.Fatalf("unexpected filtered count: got=%d want=2", len(filtered))
+	}
+	if filtered[0].IP != "2.2.2.2" || filtered[1].IP != "3.3.3.3" {
+		t.Fatalf("unexpected filtered result: %+v", filtered)
+	}
+}
+
+func TestFilterRestoreCommandCandidates_ForceRestartByIPs(t *testing.T) {
+	statuses := []*ScriptStatus{
+		{IP: "1.1.1.1", Status: "success", Command: "echo 1"},
+		{IP: "2.2.2.2", Status: "failed", Command: "echo 2"},
+		{IP: "3.3.3.3", Status: "pending", Command: "echo 3"},
+		{IP: "4.4.4.4", Status: "running", Command: "echo 4"},
+		{IP: "5.5.5.5", Status: "unknown", Command: "echo 5"},
+		{IP: "6.6.6.6", Status: "success", Command: ""},
+		nil,
+	}
+
+	filtered := filterRestoreCommandCandidates(statuses, true)
+	if len(filtered) != 5 {
+		t.Fatalf("unexpected filtered count: got=%d want=5", len(filtered))
+	}
+	if filtered[0].IP != "1.1.1.1" || filtered[1].IP != "2.2.2.2" || filtered[2].IP != "3.3.3.3" || filtered[3].IP != "4.4.4.4" || filtered[4].IP != "5.5.5.5" {
+		t.Fatalf("unexpected filtered result: %+v", filtered)
 	}
 }
