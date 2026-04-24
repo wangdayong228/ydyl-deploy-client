@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"math/big"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/spf13/cobra"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/utils/cryptoutil"
 )
@@ -37,8 +39,12 @@ func newGenPrivateKeyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			address, err := buildAddressByL2Type(privateKey, l2type)
+			if err != nil {
+				return err
+			}
 
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), privateKey)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "privateKey=%s\naddress=%s\n", privateKey, address)
 			return err
 		},
 	}
@@ -75,4 +81,19 @@ func validateGenPrivateKeyFlags(cmd *cobra.Command, groupID, chainID uint64, ind
 	}
 
 	return indexValue, nil
+}
+
+func buildAddressByL2Type(privateKey string, l2type int) (string, error) {
+	privKeyHex := strings.TrimPrefix(privateKey, "0x")
+	ecdsaKey, err := crypto.HexToECDSA(privKeyHex)
+	if err != nil {
+		return "", fmt.Errorf("解析私钥失败: %w", err)
+	}
+
+	ethAddress := strings.ToLower(crypto.PubkeyToAddress(ecdsaKey.PublicKey).Hex())
+	if l2type != 2 {
+		return ethAddress, nil
+	}
+
+	return "0x1" + ethAddress[3:], nil
 }
