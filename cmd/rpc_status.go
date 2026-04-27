@@ -19,7 +19,7 @@ var (
 
 func init() {
 	cmd := &cobra.Command{
-		Use:   "status",
+		Use:   "rpc-status",
 		Short: "检查所有链节点的运行状态",
 		Long: `读取 servers.json，并发探测每条链主节点的 L2 最新区块号与时间戳，输出健康状态表格。
 
