@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
@@ -34,28 +35,35 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	cfg := deploy.LoadConfigFromFile(configPath)
+	clientLogPath := filepath.Join(
+		cfg.CommonConfig.LogDir,
+		"client",
+		fmt.Sprintf("deploy-%s.log", time.Now().UTC().Format("20060102-150405")),
+	)
 
-	opts := deploy.RunOptions{}
-	if serversCreatePath != "" {
-		origAbs, err := filepath.Abs(serversCreatePath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "deploy 失败：解析 --servers-create 路径：", err)
-			return err
+	return withClientCommandTee(clientLogPath, func() error {
+		opts := deploy.RunOptions{}
+		if serversCreatePath != "" {
+			origAbs, err := filepath.Abs(serversCreatePath)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "deploy 失败：解析 --servers-create 路径：", err)
+				return err
+			}
+			tmpAbs, cleanup, err := deploy.CopyServersCreateSnapshotToTemp(serversCreatePath)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "deploy 失败：", err)
+				return err
+			}
+			defer cleanup()
+			log.Printf("servers_create 快照复制: %s -> %s\n", origAbs, tmpAbs)
+			opts.ServersCreateJSONPath = tmpAbs
 		}
-		tmpAbs, cleanup, err := deploy.CopyServersCreateSnapshotToTemp(serversCreatePath)
-		if err != nil {
+
+		if err := deploy.RunWithRestoreRetryWithOptions(ctx, *cfg, opts); err != nil {
 			fmt.Fprintln(os.Stderr, "deploy 失败：", err)
 			return err
 		}
-		defer cleanup()
-		log.Printf("servers_create 快照复制: %s -> %s\n", origAbs, tmpAbs)
-		opts.ServersCreateJSONPath = tmpAbs
-	}
 
-	if err := deploy.RunWithRestoreRetryWithOptions(ctx, *cfg, opts); err != nil {
-		fmt.Fprintln(os.Stderr, "deploy 失败：", err)
-		return err
-	}
-
-	return nil
+		return nil
+	})
 }

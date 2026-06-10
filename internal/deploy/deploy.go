@@ -80,6 +80,10 @@ func NewDeployer(ctx context.Context, cfg DeployConfig, opts RunOptions) (*Deplo
 	if err != nil {
 		return nil, fmt.Errorf("计算归档时间戳失败: %w", err)
 	}
+	preservedClientLogsDir, err := stashClientLogsDir(cfg.CommonConfig.LogDir, archiveTS)
+	if err != nil {
+		return nil, fmt.Errorf("暂存 client 日志目录失败: %w", err)
+	}
 	if _, err := rotateExistingDirWithTimestamp(cfg.CommonConfig.OutputDir, archiveTS); err != nil {
 		return nil, fmt.Errorf("归档旧的输出目录失败: %w", err)
 	}
@@ -90,6 +94,9 @@ func NewDeployer(ctx context.Context, cfg DeployConfig, opts RunOptions) (*Deplo
 	// 1) 准备日志目录
 	if err := os.MkdirAll(cfg.CommonConfig.LogDir, 0o755); err != nil {
 		return nil, fmt.Errorf("创建日志目录失败: %w", err)
+	}
+	if err := restoreClientLogsDir(cfg.CommonConfig.LogDir, preservedClientLogsDir); err != nil {
+		return nil, fmt.Errorf("恢复 client 日志目录失败: %w", err)
 	}
 
 	// 2) 创建 output 目录，用于保存 servers.json / script_status.json
@@ -673,6 +680,12 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 		}
 		log.Printf("%s STEP7: 初始化本地运行状态记录完成\n", logPrefix)
 		log.Printf("%s 远端后台任务已启动，pid=%d\n", logPrefix, pid)
+
+		if monitorPID, started, monitorErr := d.startRuntimeMonitor(ip, name, svc.Type, i); monitorErr != nil {
+			log.Printf("%s ⚠️ 运行日志监控启动失败（不阻断主部署）: %v\n", logPrefix, monitorErr)
+		} else if started {
+			log.Printf("%s STEP8: 运行日志监控已启动，pid=%d\n", logPrefix, monitorPID)
+		}
 	})
 
 	if len(errs) == 0 {
@@ -681,6 +694,44 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 
 	// 汇总错误：每台机器一条，便于一次性定位问题。
 	return deployMultiError{errs: errs}
+}
+
+func (d *Deployer) startRuntimeMonitor(ip, name string, serviceType enums.ServiceType, index int) (int, bool, error) {
+	cmdStr, shouldStart := buildRuntimeMonitorCommand(serviceType, index, name)
+	if !shouldStart {
+		return 0, false, nil
+	}
+
+	sshCmd := exec.CommandContext(d.ctx, "ssh",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "IdentitiesOnly=yes",
+		"-i", d.sshKeyPath,
+		fmt.Sprintf("%s@%s", d.cfg.CommonConfig.SSHUser, ip),
+		cmdStr,
+	)
+
+	var stdoutBuf bytes.Buffer
+	sshCmd.Stdout = &stdoutBuf
+	sshCmd.Stderr = &stdoutBuf
+	if err := sshCmd.Run(); err != nil {
+		return 0, true, fmt.Errorf("远端启动运行日志监控失败: %w", err)
+	}
+	sshOut := stdoutBuf.String()
+	if strings.Contains(sshOut, remoteMonitorScriptMissingMarker) {
+		return 0, true, fmt.Errorf("远端运行日志监控脚本不存在（%s）", remoteMonitorScriptMissingMarker)
+	}
+	if strings.Contains(sshOut, remoteMonitorExitEarlyMarker) {
+		return 0, true, fmt.Errorf("远端运行日志监控进程启动后立即退出（%s）", remoteMonitorExitEarlyMarker)
+	}
+
+	pid, err := parseRemotePID(sshOut)
+	if err != nil {
+		return 0, true, fmt.Errorf("解析运行日志监控 PID 失败: %w", err)
+	}
+	if pid <= 0 {
+		return 0, true, fmt.Errorf("运行日志监控 PID 非法: %d", pid)
+	}
+	return pid, true, nil
 }
 
 func (d *Deployer) waitSSHReadyWithRetry(ip string) (uint, error) {
@@ -1251,4 +1302,56 @@ func dirInfoIfRotatable(dir string) (os.FileInfo, bool, error) {
 		return info, false, nil
 	}
 	return info, true, nil
+}
+
+func stashClientLogsDir(logDir, ts string) (string, error) {
+	if strings.TrimSpace(logDir) == "" {
+		return "", nil
+	}
+	clientDir := filepath.Join(logDir, "client")
+	info, err := os.Stat(clientDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("client 日志路径不是目录: %s", clientDir)
+	}
+
+	suffix := ts
+	if strings.TrimSpace(suffix) == "" {
+		suffix = time.Now().Format("20060102-150405")
+	}
+	preservePath := fmt.Sprintf("%s-client-preserve-%s", logDir, suffix)
+	for i := 1; ; i++ {
+		if _, statErr := os.Stat(preservePath); os.IsNotExist(statErr) {
+			break
+		} else if statErr != nil {
+			return "", statErr
+		}
+		preservePath = fmt.Sprintf("%s-client-preserve-%s-%d", logDir, suffix, i)
+	}
+
+	if err := os.Rename(clientDir, preservePath); err != nil {
+		return "", err
+	}
+	return preservePath, nil
+}
+
+func restoreClientLogsDir(logDir, preservedDir string) error {
+	if strings.TrimSpace(preservedDir) == "" {
+		return nil
+	}
+	target := filepath.Join(logDir, "client")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(preservedDir, target)
 }
