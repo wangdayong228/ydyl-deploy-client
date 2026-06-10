@@ -575,7 +575,7 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 		ip := ips[idx]
 		name := d.buildInstanceName(svc.TagPrefix, svc.Type.String(), i+1)
 		logPrefix := fmt.Sprintf("[%s][%s]", ip, name)
-		log.Printf("%s 开始部署任务\n", logPrefix)
+		log.Printf("%s 开始下发远端任务\n", logPrefix)
 
 		// 再次确认标签（与 shell 版一致，用 ip -> instanceId -> 打 Name 标签）
 		log.Printf("%s STEP1: 查询实例 ID...\n", logPrefix)
@@ -653,7 +653,7 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 			return
 		}
 
-		log.Printf("%s STEP6: 解析远端 PID 完成，pid=%d\n", logPrefix, pid)
+		log.Printf("%s STEP6: 解析远端 PID 完成\n", logPrefix)
 
 		// 初始化脚本运行状态
 		log.Printf("%s STEP7: 初始化本地运行状态记录...\n", logPrefix)
@@ -672,7 +672,7 @@ func (d *Deployer) runCommandsOnInstances(ips []string, svc ServiceConfig) error
 			return
 		}
 		log.Printf("%s STEP7: 初始化本地运行状态记录完成\n", logPrefix)
-		log.Printf("%s 部署任务完成\n", logPrefix)
+		log.Printf("%s 远端后台任务已启动，pid=%d\n", logPrefix, pid)
 	})
 
 	if len(errs) == 0 {
@@ -764,6 +764,12 @@ func runWithBatchLimit(taskName string, total, batchLimit int, task func(index i
 	if batchLimit <= 0 {
 		batchLimit = total
 	}
+	taskDoneLabel := "完成"
+	batchDoneLabel := "全部完成"
+	if taskName == "run-remote-command" {
+		taskDoneLabel = "下发成功"
+		batchDoneLabel = "全部实例已下发"
+	}
 	totalRounds := (total + batchLimit - 1) / batchLimit
 	for start := 0; start < total; start += batchLimit {
 		end := start + batchLimit
@@ -782,13 +788,13 @@ func runWithBatchLimit(taskName string, total, batchLimit int, task func(index i
 				defer wg.Done()
 				globalSeq := index + 1
 				log.Printf("▶️ [batch:%s][round:%d/%d][task:%d/%d] 开始\n", taskName, currentRound, totalRounds, globalSeq, total)
-				defer log.Printf("✅ [batch:%s][round:%d/%d][task:%d/%d] 完成\n", taskName, currentRound, totalRounds, globalSeq, total)
+				defer log.Printf("✅ [batch:%s][round:%d/%d][task:%d/%d] %s\n", taskName, currentRound, totalRounds, globalSeq, total, taskDoneLabel)
 				task(index)
 			}(idx, roundNo)
 		}
 		wg.Wait()
 	}
-	log.Printf("📦 [batch:%s] 全部完成，共 %d 轮，task=%d\n", taskName, totalRounds, total)
+	log.Printf("📦 [batch:%s] %s，共 %d 轮，task=%d\n", taskName, batchDoneLabel, totalRounds, total)
 }
 
 func resolveSSHMaxConcurrency(cfg CommonConfig) int {
