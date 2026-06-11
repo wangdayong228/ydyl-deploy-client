@@ -7,7 +7,7 @@ import (
 	"github.com/wangdayong228/ydyl-deploy-client/internal/constants/enums"
 )
 
-func TestShouldCollectXjstRuntimeByName(t *testing.T) {
+func TestShouldCollectXjstNodeByName(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -15,9 +15,11 @@ func TestShouldCollectXjstRuntimeByName(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{name: "node-1", in: "tps-ydyl-xjst-1", want: true},
-		{name: "node-5", in: "tps-ydyl-xjst-5", want: true},
-		{name: "node-2", in: "tps-ydyl-xjst-2", want: false},
+		{name: "node-1 flat", in: "tps-ydyl-xjst-1", want: true},
+		{name: "node-5 flat", in: "tps-ydyl-xjst-5", want: true},
+		{name: "node-2 flat", in: "tps-ydyl-xjst-2", want: false},
+		{name: "node-1 grouped", in: "tps-ydyl4-xjst-1-1", want: true},
+		{name: "node-2 grouped", in: "tps-ydyl4-xjst-1-2", want: false},
 		{name: "invalid", in: "tps-ydyl-xjst", want: false},
 	}
 
@@ -25,11 +27,32 @@ func TestShouldCollectXjstRuntimeByName(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := shouldCollectXjstRuntimeByName(tc.in)
+			got := shouldCollectXjstNodeByName(tc.in)
 			if got != tc.want {
-				t.Fatalf("shouldCollectXjstRuntimeByName(%q)=%v, want=%v", tc.in, got, tc.want)
+				t.Fatalf("shouldCollectXjstNodeByName(%q)=%v, want=%v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuildCollectTargets_Xjst(t *testing.T) {
+	t.Parallel()
+
+	node1 := buildCollectTargets(&ScriptStatus{
+		ServiceType: "xjst",
+		Name:        "tps-ydyl4-xjst-1-1",
+		LogPath:     "/home/ubuntu/ydyl-deploy-logs/tps-ydyl4-xjst-1-1.log",
+	})
+	if len(node1) != 2 {
+		t.Fatalf("xjst node-1 should have 2 targets, got %d", len(node1))
+	}
+	for i, target := range node1 {
+		if target.SkipByDesign {
+			t.Fatalf("xjst node-1 target[%d] should not be skipped", i)
+		}
+	}
+	if node1[0].Category != "deploy" || node1[1].Category != "runtime" {
+		t.Fatalf("xjst node-1 targets should be deploy then runtime, got %q then %q", node1[0].Category, node1[1].Category)
 	}
 }
 

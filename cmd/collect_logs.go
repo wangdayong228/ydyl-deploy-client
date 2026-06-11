@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -30,6 +31,7 @@ func runCollectLogs(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	cfg := deploy.LoadConfigFromFile(configPath)
+	log.Printf("👉 collect-logs 启动，config=%s\n", configPath)
 	if err := deploy.CollectLogs(ctx, cfg.CommonConfig, deploy.CollectLogsOptions{
 		OutputDir: collectLogsOutputDir,
 	}); err != nil {
