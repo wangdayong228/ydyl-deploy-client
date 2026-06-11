@@ -68,9 +68,9 @@ func buildRuntimeMonitorCommand(serviceType enums.ServiceType, index int, name s
 
 	switch serviceType {
 	case enums.ServiceTypeCDK:
-		return buildStartCmd(fmt.Sprintf("--mode kurtosis --output '%s' --enclave cdk-gen", output)), true
+		return buildStartCmd(fmt.Sprintf("--mode kurtosis --stack cdk --output '%s' --enclave cdk-gen", output)), true
 	case enums.ServiceTypeOP:
-		return buildStartCmd(fmt.Sprintf("--mode kurtosis --output '%s' --enclave op-gen", output)), true
+		return buildStartCmd(fmt.Sprintf("--mode kurtosis --stack op --output '%s' --enclave op-gen", output)), true
 	case enums.ServiceTypeXJST:
 		if index%4 != 0 {
 			return "", false

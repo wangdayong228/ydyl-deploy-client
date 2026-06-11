@@ -49,6 +49,17 @@ func TestBuildRuntimeMonitorCommand(t *testing.T) {
 	if !strings.Contains(cmd, remoteMonitorExitEarlyMarker) {
 		t.Fatalf("cdk monitor command should include early-exit marker")
 	}
+	if !strings.Contains(cmd, "--stack cdk") {
+		t.Fatalf("cdk monitor command should pass --stack cdk, got: %s", cmd)
+	}
+
+	cmd, ok = buildRuntimeMonitorCommand(enums.ServiceTypeOP, 0, "demo-op-1")
+	if !ok || cmd == "" {
+		t.Fatalf("op monitor command should be enabled")
+	}
+	if !strings.Contains(cmd, "--stack op") {
+		t.Fatalf("op monitor command should pass --stack op, got: %s", cmd)
+	}
 
 	cmd, ok = buildRuntimeMonitorCommand(enums.ServiceTypeXJST, 1, "demo-xjst-2")
 	if ok || cmd != "" {
@@ -58,5 +69,8 @@ func TestBuildRuntimeMonitorCommand(t *testing.T) {
 	cmd, ok = buildRuntimeMonitorCommand(enums.ServiceTypeXJST, 4, "demo-xjst-5")
 	if !ok || cmd == "" {
 		t.Fatalf("xjst node1 should start runtime monitor")
+	}
+	if strings.Contains(cmd, "--stack") {
+		t.Fatalf("xjst docker monitor command should not pass --stack, got: %s", cmd)
 	}
 }
