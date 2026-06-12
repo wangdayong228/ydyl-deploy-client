@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -38,7 +39,7 @@ type LogCollectManifestEntry struct {
 	IP             string `json:"ip"`
 	Name           string `json:"name"`
 	ServiceType    string `json:"serviceType"`
-	Category       string `json:"category"` // deploy | runtime
+	Category       string `json:"category"` // deploy | runtime | client
 	RemotePath     string `json:"remotePath"`
 	LocalGz        string `json:"localGz"`
 	Lines          int64  `json:"lines"`
@@ -128,108 +129,24 @@ func CollectLogs(ctx context.Context, commonCfg CommonConfig, opts CollectLogsOp
 			st.IP, st.Name, st.ServiceType, len(targets))
 
 		for _, target := range targets {
-			entry := LogCollectManifestEntry{
-				IP:          st.IP,
-				Name:        st.Name,
-				ServiceType: st.ServiceType,
-				Category:    target.Category,
-				RemotePath:  target.RemotePath,
-				LocalGz: filepath.ToSlash(filepath.Join(
-					commonCfg.LogDir,
-					"collected",
-					serverDirName,
-					target.LocalNameGz,
-				)),
-			}
-
-			log.Printf("  ▶ [%s][%s] %s -> %s\n",
-				target.Category, target.LocalNameGz, target.RemotePath, entry.LocalGz)
-
-			if target.SkipByDesign {
-				entry.Skipped = true
-				entry.SkipReason = target.SkipReason
-				log.Printf("  ℹ️ [%s][%s] 按设计跳过: %s\n", st.IP, st.Name, target.SkipReason)
-				manifest.Entries = append(manifest.Entries, entry)
-				continue
-			}
-
-			log.Printf("  📊 [%s][%s] 统计远端行数: %s\n", st.IP, st.Name, target.RemotePath)
-			lines, exists, err := probeRemoteFileLines(ctx, commonCfg.SSHUser, keyPath, st.IP, target.RemotePath)
-			if err != nil {
-				entry.Skipped = true
-				entry.SkipReason = err.Error()
-				allErrs = append(allErrs, fmt.Errorf("[%s][%s] 统计行数失败(%s): %w", st.IP, st.Name, target.RemotePath, err))
-				log.Printf("  ⚠️ [%s][%s] 统计行数失败: %v\n", st.IP, st.Name, err)
-				manifest.Entries = append(manifest.Entries, entry)
-				continue
-			}
-			if !exists {
-				entry.Skipped = true
-				entry.SkipReason = "远端文件不存在"
-				log.Printf("  ℹ️ [%s][%s] 远端文件不存在，跳过: %s\n", st.IP, st.Name, target.RemotePath)
-				manifest.Entries = append(manifest.Entries, entry)
-				continue
-			}
-
-			entry.Lines = lines
-			log.Printf("  📊 [%s][%s] 行数=%d\n", st.IP, st.Name, lines)
-			remoteTmpPath := filepath.ToSlash(filepath.Join(
-				"/tmp",
-				fmt.Sprintf("ydyl-collect-%d-%s", time.Now().UnixNano(), target.LocalNameGz),
-			))
-			log.Printf("  🗜️ [%s][%s] 远端压缩中: %s\n", st.IP, st.Name, target.RemotePath)
-			if err := gzipRemoteFile(ctx, commonCfg.SSHUser, keyPath, st.IP, target.RemotePath, remoteTmpPath); err != nil {
-				entry.Skipped = true
-				entry.SkipReason = err.Error()
-				allErrs = append(allErrs, fmt.Errorf("[%s][%s] 压缩失败(%s): %w", st.IP, st.Name, target.RemotePath, err))
-				log.Printf("  ⚠️ [%s][%s] 压缩失败: %v\n", st.IP, st.Name, err)
-				manifest.Entries = append(manifest.Entries, entry)
-				continue
-			}
-			log.Printf("  🗜️ [%s][%s] 远端压缩完成\n", st.IP, st.Name)
-
-			log.Printf("  📥 [%s][%s] rsync 拉回中...\n", st.IP, st.Name)
-			rsyncErr := rsyncRemoteFile(ctx, commonCfg.SSHUser, keyPath, st.IP, remoteTmpPath, serverLocalDir)
-			if cleanupErr := removeRemoteFile(ctx, commonCfg.SSHUser, keyPath, st.IP, remoteTmpPath); cleanupErr != nil {
-				allErrs = append(allErrs, fmt.Errorf("[%s][%s] 清理远端临时压缩包失败(%s): %w", st.IP, st.Name, remoteTmpPath, cleanupErr))
-				log.Printf("  ⚠️ [%s][%s] 清理远端临时压缩包失败: %v\n", st.IP, st.Name, cleanupErr)
-			}
-			if rsyncErr != nil {
-				entry.Skipped = true
-				entry.SkipReason = rsyncErr.Error()
-				allErrs = append(allErrs, fmt.Errorf("[%s][%s] rsync 失败(%s): %w", st.IP, st.Name, remoteTmpPath, rsyncErr))
-				log.Printf("  ⚠️ [%s][%s] rsync 失败: %v\n", st.IP, st.Name, rsyncErr)
-				manifest.Entries = append(manifest.Entries, entry)
-				continue
-			}
-
-			downloadedPath := filepath.Join(serverLocalDir, filepath.Base(remoteTmpPath))
-			finalPath := filepath.Join(serverLocalDir, target.LocalNameGz)
-			if err := os.Rename(downloadedPath, finalPath); err != nil {
-				entry.Skipped = true
-				entry.SkipReason = fmt.Sprintf("重命名本地文件失败: %v", err)
-				allErrs = append(allErrs, fmt.Errorf("[%s][%s] 重命名本地文件失败: %w", st.IP, st.Name, err))
-				log.Printf("  ⚠️ [%s][%s] 重命名本地文件失败: %v\n", st.IP, st.Name, err)
-				manifest.Entries = append(manifest.Entries, entry)
-				continue
-			}
-
-			info, statErr := os.Stat(finalPath)
-			if statErr != nil {
-				entry.Skipped = true
-				entry.SkipReason = fmt.Sprintf("读取本地压缩包大小失败: %v", statErr)
-				allErrs = append(allErrs, fmt.Errorf("[%s][%s] 读取本地压缩包失败: %w", st.IP, st.Name, statErr))
-				log.Printf("  ⚠️ [%s][%s] 读取本地压缩包失败: %v\n", st.IP, st.Name, statErr)
-				manifest.Entries = append(manifest.Entries, entry)
-				continue
-			}
-			entry.SizeCompressed = info.Size()
-			entry.LocalGz = filepath.ToSlash(filepath.Join(commonCfg.LogDir, "collected", serverDirName, target.LocalNameGz))
+			entry, extraErrs := collectRemoteLogFile(ctx, commonCfg, keyPath, remoteLogCollectParams{
+				IP:            st.IP,
+				Name:          st.Name,
+				ServiceType:   st.ServiceType,
+				Category:      target.Category,
+				RemotePath:    target.RemotePath,
+				LocalNameGz:   target.LocalNameGz,
+				ServerDirName: serverDirName,
+				ServerLocalDir: serverLocalDir,
+				SkipByDesign:  target.SkipByDesign,
+				SkipReason:    target.SkipReason,
+			})
+			allErrs = append(allErrs, extraErrs...)
 			manifest.Entries = append(manifest.Entries, entry)
-			log.Printf("  ✅ [%s][%s] 已保存 %s（%d 行, %d 字节）\n",
-				st.IP, st.Name, entry.LocalGz, entry.Lines, entry.SizeCompressed)
 		}
 	}
+
+	collectBenchClientLogs(ctx, commonCfg, keyPath, collectedDir, &manifest, &allErrs)
 
 	manifestPath := filepath.Join(collectedDir, "manifest.json")
 	log.Printf("👉 [collect-logs] 写入 manifest: %s\n", manifestPath)
@@ -341,6 +258,243 @@ func buildCollectTargets(st *ScriptStatus) []remoteLogTarget {
 		})
 	}
 	return targets
+}
+
+var benchClientLogNameRE = regexp.MustCompile(`^bench-cross-tx-(\d{8}-\d{6})\.log$`)
+
+type remoteLogCollectParams struct {
+	IP             string
+	Name           string
+	ServiceType    string
+	Category       string
+	RemotePath     string
+	LocalNameGz    string
+	ServerDirName  string
+	ServerLocalDir string
+	SkipByDesign   bool
+	SkipReason     string
+}
+
+func collectRemoteLogFile(
+	ctx context.Context,
+	commonCfg CommonConfig,
+	keyPath string,
+	p remoteLogCollectParams,
+) (LogCollectManifestEntry, []error) {
+	var extraErrs []error
+
+	entry := LogCollectManifestEntry{
+		IP:          p.IP,
+		Name:        p.Name,
+		ServiceType: p.ServiceType,
+		Category:    p.Category,
+		RemotePath:  p.RemotePath,
+		LocalGz: filepath.ToSlash(filepath.Join(
+			commonCfg.LogDir,
+			"collected",
+			p.ServerDirName,
+			p.LocalNameGz,
+		)),
+	}
+
+	log.Printf("  ▶ [%s][%s] %s -> %s\n",
+		p.Category, p.LocalNameGz, p.RemotePath, entry.LocalGz)
+
+	if p.SkipByDesign {
+		entry.Skipped = true
+		entry.SkipReason = p.SkipReason
+		log.Printf("  ℹ️ [%s][%s] 按设计跳过: %s\n", p.IP, p.Name, p.SkipReason)
+		return entry, extraErrs
+	}
+
+	log.Printf("  📊 [%s][%s] 统计远端行数: %s\n", p.IP, p.Name, p.RemotePath)
+	lines, exists, err := probeRemoteFileLines(ctx, commonCfg.SSHUser, keyPath, p.IP, p.RemotePath)
+	if err != nil {
+		entry.Skipped = true
+		entry.SkipReason = err.Error()
+		extraErrs = append(extraErrs, fmt.Errorf("[%s][%s] 统计行数失败(%s): %w", p.IP, p.Name, p.RemotePath, err))
+		log.Printf("  ⚠️ [%s][%s] 统计行数失败: %v\n", p.IP, p.Name, err)
+		return entry, extraErrs
+	}
+	if !exists {
+		entry.Skipped = true
+		entry.SkipReason = "远端文件不存在"
+		log.Printf("  ℹ️ [%s][%s] 远端文件不存在，跳过: %s\n", p.IP, p.Name, p.RemotePath)
+		return entry, extraErrs
+	}
+
+	entry.Lines = lines
+	log.Printf("  📊 [%s][%s] 行数=%d\n", p.IP, p.Name, lines)
+	remoteTmpPath := filepath.ToSlash(filepath.Join(
+		"/tmp",
+		fmt.Sprintf("ydyl-collect-%d-%s", time.Now().UnixNano(), p.LocalNameGz),
+	))
+	log.Printf("  🗜️ [%s][%s] 远端压缩中: %s\n", p.IP, p.Name, p.RemotePath)
+	if err := gzipRemoteFile(ctx, commonCfg.SSHUser, keyPath, p.IP, p.RemotePath, remoteTmpPath); err != nil {
+		entry.Skipped = true
+		entry.SkipReason = err.Error()
+		extraErrs = append(extraErrs, fmt.Errorf("[%s][%s] 压缩失败(%s): %w", p.IP, p.Name, p.RemotePath, err))
+		log.Printf("  ⚠️ [%s][%s] 压缩失败: %v\n", p.IP, p.Name, err)
+		return entry, extraErrs
+	}
+	log.Printf("  🗜️ [%s][%s] 远端压缩完成\n", p.IP, p.Name)
+
+	log.Printf("  📥 [%s][%s] rsync 拉回中...\n", p.IP, p.Name)
+	rsyncErr := rsyncRemoteFile(ctx, commonCfg.SSHUser, keyPath, p.IP, remoteTmpPath, p.ServerLocalDir)
+	if cleanupErr := removeRemoteFile(ctx, commonCfg.SSHUser, keyPath, p.IP, remoteTmpPath); cleanupErr != nil {
+		extraErrs = append(extraErrs, fmt.Errorf("[%s][%s] 清理远端临时压缩包失败(%s): %w", p.IP, p.Name, remoteTmpPath, cleanupErr))
+		log.Printf("  ⚠️ [%s][%s] 清理远端临时压缩包失败: %v\n", p.IP, p.Name, cleanupErr)
+	}
+	if rsyncErr != nil {
+		entry.Skipped = true
+		entry.SkipReason = rsyncErr.Error()
+		extraErrs = append(extraErrs, fmt.Errorf("[%s][%s] rsync 失败(%s): %w", p.IP, p.Name, remoteTmpPath, rsyncErr))
+		log.Printf("  ⚠️ [%s][%s] rsync 失败: %v\n", p.IP, p.Name, rsyncErr)
+		return entry, extraErrs
+	}
+
+	downloadedPath := filepath.Join(p.ServerLocalDir, filepath.Base(remoteTmpPath))
+	finalPath := filepath.Join(p.ServerLocalDir, p.LocalNameGz)
+	if err := os.Rename(downloadedPath, finalPath); err != nil {
+		entry.Skipped = true
+		entry.SkipReason = fmt.Sprintf("重命名本地文件失败: %v", err)
+		extraErrs = append(extraErrs, fmt.Errorf("[%s][%s] 重命名本地文件失败: %w", p.IP, p.Name, err))
+		log.Printf("  ⚠️ [%s][%s] 重命名本地文件失败: %v\n", p.IP, p.Name, err)
+		return entry, extraErrs
+	}
+
+	info, statErr := os.Stat(finalPath)
+	if statErr != nil {
+		entry.Skipped = true
+		entry.SkipReason = fmt.Sprintf("读取本地压缩包大小失败: %v", statErr)
+		extraErrs = append(extraErrs, fmt.Errorf("[%s][%s] 读取本地压缩包失败: %w", p.IP, p.Name, statErr))
+		log.Printf("  ⚠️ [%s][%s] 读取本地压缩包失败: %v\n", p.IP, p.Name, statErr)
+		return entry, extraErrs
+	}
+	entry.SizeCompressed = info.Size()
+	entry.LocalGz = filepath.ToSlash(filepath.Join(commonCfg.LogDir, "collected", p.ServerDirName, p.LocalNameGz))
+	log.Printf("  ✅ [%s][%s] 已保存 %s（%d 行, %d 字节）\n",
+		p.IP, p.Name, entry.LocalGz, entry.Lines, entry.SizeCompressed)
+	return entry, extraErrs
+}
+
+func remoteBenchClientLogDir(commonCfg CommonConfig) string {
+	logDir := strings.TrimSpace(commonCfg.LogDir)
+	if logDir == "" {
+		logDir = "logs"
+	}
+	return filepath.ToSlash(filepath.Join(remoteRepoDirDefault, "ydyl-deploy-client", logDir, "client"))
+}
+
+func benchClientLocalDirName(ip string) string {
+	return fmt.Sprintf("%s_bench-client", strings.TrimSpace(ip))
+}
+
+func pickLatestBenchClientLog(paths []string) (string, bool) {
+	var bestPath string
+	var bestTS string
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		base := filepath.Base(p)
+		matches := benchClientLogNameRE.FindStringSubmatch(base)
+		if len(matches) != 2 {
+			continue
+		}
+		ts := matches[1]
+		if bestPath == "" || ts > bestTS {
+			bestPath = p
+			bestTS = ts
+		}
+	}
+	if bestPath == "" {
+		return "", false
+	}
+	return bestPath, true
+}
+
+// buildBenchClientListCommand 列出远端 client 目录内容；目录路径 quote，避免 glob 被 shell 引号禁用展开。
+func buildBenchClientListCommand(remoteDir string) string {
+	return fmt.Sprintf("ls -1 %s 2>/dev/null || true", shellQuote(remoteDir))
+}
+
+// resolveBenchClientRemotePath 将 ls 返回的 basename 拼成远端绝对路径。
+func resolveBenchClientRemotePath(remoteDir, picked string) string {
+	picked = strings.TrimSpace(picked)
+	if picked == "" {
+		return picked
+	}
+	if strings.HasPrefix(picked, "/") {
+		return picked
+	}
+	return path.Join(remoteDir, path.Base(picked))
+}
+
+func parseRemoteLSOutput(out string) []string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	paths := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return paths
+}
+
+func collectBenchClientLogs(
+	ctx context.Context,
+	commonCfg CommonConfig,
+	keyPath, collectedDir string,
+	manifest *LogCollectManifest,
+	allErrs *[]error,
+) {
+	ip := strings.TrimSpace(commonCfg.BenchClientIP)
+	if ip == "" {
+		log.Printf("ℹ️ [collect-logs] benchClientIP 未配置，跳过 bench client 日志\n")
+		return
+	}
+
+	remoteDir := remoteBenchClientLogDir(commonCfg)
+	out, err := runSSH(ctx, commonCfg.SSHUser, keyPath, ip, buildBenchClientListCommand(remoteDir))
+	if err != nil {
+		*allErrs = append(*allErrs, fmt.Errorf("[bench-client][%s] 列出远端日志失败: %w", ip, err))
+		log.Printf("  ⚠️ [collect-logs][bench-client][%s] 列出远端日志失败: %v\n", ip, err)
+		return
+	}
+
+	latest, ok := pickLatestBenchClientLog(parseRemoteLSOutput(out))
+	if !ok {
+		log.Printf("ℹ️ [collect-logs] bench client 无 bench-cross-tx 日志，跳过\n")
+		return
+	}
+	remotePath := resolveBenchClientRemotePath(remoteDir, latest)
+
+	serverDirName := benchClientLocalDirName(ip)
+	serverLocalDir := filepath.Join(collectedDir, serverDirName)
+	if err := os.MkdirAll(serverLocalDir, 0o755); err != nil {
+		*allErrs = append(*allErrs, fmt.Errorf("[bench-client][%s] 创建本地目录失败: %w", ip, err))
+		log.Printf("  ⚠️ [collect-logs][bench-client][%s] 创建本地目录失败: %v\n", ip, err)
+		return
+	}
+
+	localGzName := path.Base(remotePath) + ".gz"
+	log.Printf("👉 [collect-logs][bench-client][%s] 收集最新日志: %s\n", ip, remotePath)
+
+	entry, extraErrs := collectRemoteLogFile(ctx, commonCfg, keyPath, remoteLogCollectParams{
+		IP:             ip,
+		Name:           "bench-client",
+		ServiceType:    "bench",
+		Category:       "client",
+		RemotePath:     remotePath,
+		LocalNameGz:    localGzName,
+		ServerDirName:  serverDirName,
+		ServerLocalDir: serverLocalDir,
+	})
+	*allErrs = append(*allErrs, extraErrs...)
+	manifest.Entries = append(manifest.Entries, entry)
 }
 
 func shouldCollectXjstNodeByName(name string) bool {
@@ -515,7 +669,9 @@ func collectCompressedRows(logDir string, manifest map[string]LogCollectManifest
 			lines = entry.Lines
 			ip = entry.IP
 			name = entry.Name
-			if strings.EqualFold(entry.Category, "runtime") {
+			if strings.EqualFold(entry.Category, "client") {
+				category = "client"
+			} else if strings.EqualFold(entry.Category, "runtime") {
 				category = "runtime"
 			} else if strings.Contains(strings.ToLower(entry.RemotePath), "deploy-gen.log") {
 				category = "kurtosis-deploy"

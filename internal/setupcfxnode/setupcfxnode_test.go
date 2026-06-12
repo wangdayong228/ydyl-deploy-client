@@ -94,6 +94,7 @@ sshReadyRetryInterval: 1s
 keyName: test-key
 logDir: logs
 outputDir: output
+benchClientIP: ""
 l1ChainId: "11155111"
 l1RpcUrl: %q
 l1RpcUrlWs: wss://example-rpc.local/ws

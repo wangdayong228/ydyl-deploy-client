@@ -56,6 +56,143 @@ func TestBuildCollectTargets_Xjst(t *testing.T) {
 	}
 }
 
+func TestPickLatestBenchClientLog(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		paths   []string
+		want    string
+		wantOK  bool
+	}{
+		{
+			name: "multiple picks latest ts",
+			paths: []string{
+				"/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client/bench-cross-tx-20260101-120000.log",
+				"/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client/bench-cross-tx-20260202-030405.log",
+				"/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client/bench-cross-tx-20260115-235959.log",
+			},
+			want:   "/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client/bench-cross-tx-20260202-030405.log",
+			wantOK: true,
+		},
+		{
+			name:   "single file",
+			paths:  []string{"bench-cross-tx-20260102-150405.log"},
+			want:   "bench-cross-tx-20260102-150405.log",
+			wantOK: true,
+		},
+		{
+			name:   "empty list",
+			paths:  nil,
+			wantOK: false,
+		},
+		{
+			name: "ignores invalid names",
+			paths: []string{
+				"deploy-20260102-150405.log",
+				"bench-cross-tx-invalid.log",
+			},
+			wantOK: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := pickLatestBenchClientLog(tc.paths)
+			if ok != tc.wantOK {
+				t.Fatalf("pickLatestBenchClientLog ok=%v, want %v", ok, tc.wantOK)
+			}
+			if got != tc.want {
+				t.Fatalf("pickLatestBenchClientLog=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRemoteBenchClientLogDir(t *testing.T) {
+	t.Parallel()
+
+	got := remoteBenchClientLogDir(CommonConfig{})
+	want := "/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client"
+	if got != want {
+		t.Fatalf("default dir=%q, want %q", got, want)
+	}
+
+	got = remoteBenchClientLogDir(CommonConfig{LogDir: "custom-logs"})
+	want = "/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/custom-logs/client"
+	if got != want {
+		t.Fatalf("custom logDir=%q, want %q", got, want)
+	}
+}
+
+func TestBenchClientLocalDirName(t *testing.T) {
+	t.Parallel()
+
+	got := benchClientLocalDirName("44.233.222.148")
+	if got != "44.233.222.148_bench-client" {
+		t.Fatalf("dir name=%q, want 44.233.222.148_bench-client", got)
+	}
+}
+
+func TestBuildBenchClientListCommand(t *testing.T) {
+	t.Parallel()
+
+	remoteDir := "/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client"
+	got := buildBenchClientListCommand(remoteDir)
+	want := "ls -1 '/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client' 2>/dev/null || true"
+	if got != want {
+		t.Fatalf("buildBenchClientListCommand=%q, want %q", got, want)
+	}
+	if strings.Contains(got, "*") {
+		t.Fatalf("list command should not embed shell glob: %q", got)
+	}
+}
+
+func TestResolveBenchClientRemotePath(t *testing.T) {
+	t.Parallel()
+
+	remoteDir := "/home/ubuntu/workspace/ydyl-deployment-suite/ydyl-deploy-client/logs/client"
+	cases := []struct {
+		name   string
+		picked string
+		want   string
+	}{
+		{
+			name:   "basename",
+			picked: "bench-cross-tx-20260102-150405.log",
+			want:   remoteDir + "/bench-cross-tx-20260102-150405.log",
+		},
+		{
+			name:   "absolute unchanged",
+			picked: remoteDir + "/bench-cross-tx-20260102-150405.log",
+			want:   remoteDir + "/bench-cross-tx-20260102-150405.log",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveBenchClientRemotePath(remoteDir, tc.picked)
+			if got != tc.want {
+				t.Fatalf("resolveBenchClientRemotePath=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseRemoteLSOutput(t *testing.T) {
+	t.Parallel()
+
+	got := parseRemoteLSOutput("  /a/b.log\n\n/c/d.log  \n")
+	want := []string{"/a/b.log", "/c/d.log"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("parseRemoteLSOutput=%v, want %v", got, want)
+	}
+}
+
 func TestBuildRuntimeMonitorCommand(t *testing.T) {
 	t.Parallel()
 

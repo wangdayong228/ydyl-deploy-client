@@ -158,6 +158,10 @@ go run . tps --config ./7s_jobs.gen.json
   - 按 `servers.json` 对远端机器执行关机
 - `bench-cross-tx`
   - 校验 jobs JSON 后执行 `docker compose up --build multijob-1 ... multijob-8`
+- `collect-logs`
+  - 从 `script_status.json` 节点收集 pipe / kurtosis / runtime 日志；配置 `benchClientIP` 时另从压测机收集最新 `bench-cross-tx-*.log`
+- `stats-logs`
+  - 统计本地 `logs/client`、`logs/collected` 等日志行数与大小，输出 `output/log_stats.csv`
 - `tps`
   - 校验 jobs JSON 后执行 `docker compose up --build tps`
 - `gen-private-key`
@@ -189,6 +193,7 @@ go run . gen-private-key --groupID 77 --index 42 --l2type 2
   - `sshKeyDir`
   - `logDir`
   - `outputDir`
+  - `benchClientIP` — 跨链压测机公网 IP；`collect-logs` 从此机 `ydyl-deploy-client/{logDir}/client/` 收集**最新** `bench-cross-tx-*.log`
 - L1 通用配置
   - `l1ChainId`
   - `l1RpcUrl`

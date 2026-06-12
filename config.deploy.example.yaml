@@ -15,6 +15,7 @@ sshReadyRetryInterval: 5s               # SSH 就绪探测重试间隔
 keyName: dayong-op-stack               # 对应本地 ~/.ssh/dayong-op-stack.pem
 logDir: logs
 outputDir: output
+# benchClientIP: 1.2.3.4              # 跨链压测机公网 IP；collect-logs 从此机 logs/client 收集最新 bench-cross-tx 日志
 
 # 链通用配置
 l1ChainId: 7655 #3151908

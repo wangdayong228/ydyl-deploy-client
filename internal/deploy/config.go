@@ -61,6 +61,8 @@ type CommonConfig struct {
 	SSHReadyRetryInterval time.Duration `yaml:"sshReadyRetryInterval"`
 	KeyName               string        `yaml:"keyName"`
 	LogDir                string        `yaml:"logDir"`
+	// BenchClientIP 为跨链压测专用 EC2 公网 IP；collect-logs 从此机收集最新 bench-cross-tx 客户端日志。
+	BenchClientIP string `yaml:"benchClientIP"`
 
 	// 输出目录：用于保存服务器 IP 列表和脚本运行状态等 JSON 文件
 	OutputDir string `yaml:"outputDir"`

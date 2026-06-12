@@ -18,7 +18,7 @@ func init() {
 	cmd := &cobra.Command{
 		Use:   "collect-logs",
 		Short: "收集远端部署/运行日志并压缩拉回本地",
-		Long:  "读取 output/script_status.json，按 service 类型收集 pipe、kurtosis deploy、runtime 日志：先统计行数，再远端 gzip 压缩，并通过 rsync 拉回 logs/collected，同时写入 manifest.json。",
+		Long:  "读取 output/script_status.json，按 service 类型收集 pipe、kurtosis deploy、runtime 日志；若配置了 benchClientIP，另从压测机 ydyl-deploy-client/logs/client 收集最新 bench-cross-tx 日志。流程：统计行数 → 远端 gzip → rsync 拉回 logs/collected → 写入 manifest.json。",
 		RunE:  runCollectLogs,
 	}
 	cmd.Flags().StringVarP(&configPath, "config", "f", "./config.deploy.yaml", "部署配置文件路径（YAML）")
