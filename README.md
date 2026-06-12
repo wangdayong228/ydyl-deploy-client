@@ -133,6 +133,11 @@ go run . tps --config ./7s_jobs.gen.json
 
 这两个命令会进入 `../ydyl-bench-docker` 启动 Docker Compose service；如果传入 `--config`，会先校验该文件与 `ydyl-deploy-client/output/jobs/all.json` 的 JSON 内容一致。不传 `--config` 时跳过该校验。
 
+`bench-cross-tx` 会将命令 stdout/stderr（含 `docker compose` 输出）自动 tee 到 `{logDir}/client/bench-cross-tx-{ts}.log`：
+
+- 从 `-f` / `--deploy-config`（默认 `./config.deploy.yaml`）读取 `logDir`
+- 可用 `go run . stats-logs` 统计 `logs/client/*.log` 行数与大小
+
 - `multijob-1` 到 `multijob-8`
 - `tps`
 

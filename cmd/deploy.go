@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
@@ -35,13 +34,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	cfg := deploy.LoadConfigFromFile(configPath)
-	clientLogPath := filepath.Join(
-		cfg.CommonConfig.LogDir,
-		"client",
-		fmt.Sprintf("deploy-%s.log", time.Now().UTC().Format("20060102-150405")),
-	)
+	clientLogFile := clientLogPath(cfg.CommonConfig.LogDir, "deploy")
 
-	return withClientCommandTee(clientLogPath, func() error {
+	return withClientCommandTee(clientLogFile, func() error {
 		opts := deploy.RunOptions{}
 		if serversCreatePath != "" {
 			origAbs, err := filepath.Abs(serversCreatePath)

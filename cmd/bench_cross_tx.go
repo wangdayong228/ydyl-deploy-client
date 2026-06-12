@@ -3,17 +3,18 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
-	"path/filepath"
-	"time"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/crosstxbench"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
 )
 
 var (
-	benchCrossTxConfigPath string
-	benchCrossTxLogDir     string
+	benchCrossTxConfigPath       string
+	benchCrossTxDeployConfigPath string
 )
 
 func init() {
@@ -25,17 +26,29 @@ func init() {
 	}
 
 	cmd.Flags().StringVar(&benchCrossTxConfigPath, "config", "", "jobs 配置文件路径（可选；传入时会与 output/jobs/all.json 做 JSON 内容校验）")
-	cmd.Flags().StringVar(&benchCrossTxLogDir, "log-dir", "logs", "客户端日志根目录（默认 logs）")
+	cmd.Flags().StringVarP(&benchCrossTxDeployConfigPath, "deploy-config", "f", "./config.deploy.yaml", "部署配置文件路径（YAML），用于读取 logDir")
 
 	rootCmd.AddCommand(cmd)
+}
+
+func resolveBenchCrossTxLogDir() string {
+	logDir := deploy.LoadConfigFromFile(benchCrossTxDeployConfigPath).CommonConfig.LogDir
+	if strings.TrimSpace(logDir) == "" {
+		logDir = "logs"
+	}
+	return logDir
 }
 
 func runBenchCrossTx(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	logPath := filepath.Join(benchCrossTxLogDir, "client", fmt.Sprintf("bench-cross-tx-%s.log", time.Now().UTC().Format("20060102-150405")))
+	logDir := resolveBenchCrossTxLogDir()
+	logPath := clientLogPath(logDir, "bench-cross-tx")
+
 	return withClientCommandTee(logPath, func() error {
+		log.Printf("👉 bench-cross-tx 启动，deploy-config=%s，client log=%s\n", benchCrossTxDeployConfigPath, logPath)
+
 		if err := crosstxbench.DefaultBench().Run(ctx, crosstxbench.Params{
 			ConfigPath: benchCrossTxConfigPath,
 		}); err != nil {
