@@ -193,6 +193,50 @@ func TestParseRemoteLSOutput(t *testing.T) {
 	}
 }
 
+func TestCollectLogsWarmupIPs(t *testing.T) {
+	t.Parallel()
+
+	statuses := []*ScriptStatus{
+		{ServiceType: "cdk", Name: "tps-ydyl-cdk-1", IP: "54.202.92.168"},
+		{ServiceType: "op", Name: "tps-ydyl-op-1", IP: "44.244.76.243"},
+		{ServiceType: "xjst", Name: "tps-ydyl4-xjst-1-1", IP: "35.92.141.61"},
+		{ServiceType: "xjst", Name: "tps-ydyl4-xjst-1-2", IP: "16.145.47.68"},
+	}
+	got := collectLogsWarmupIPs(statuses, "127.0.0.1")
+	want := []string{"127.0.0.1", "35.92.141.61", "44.244.76.243", "54.202.92.168"}
+	if len(got) != len(want) {
+		t.Fatalf("collectLogsWarmupIPs=%v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("collectLogsWarmupIPs=%v, want %v", got, want)
+		}
+	}
+}
+
+func TestParseLastInt64Line_SSHKnownHostsWarning(t *testing.T) {
+	t.Parallel()
+
+	out := "Warning: Permanently added '54.202.92.168' (ED25519) to the list of known hosts.\r\n1253"
+	got, err := parseLastInt64Line(out)
+	if err != nil {
+		t.Fatalf("parseLastInt64Line failed: %v", err)
+	}
+	if got != 1253 {
+		t.Fatalf("parseLastInt64Line=%d, want 1253", got)
+	}
+}
+
+func TestBuildRsyncSSHSpec(t *testing.T) {
+	t.Parallel()
+
+	got := buildRsyncSSHSpec("/home/user/.ssh/key.pem")
+	want := "ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i /home/user/.ssh/key.pem"
+	if got != want {
+		t.Fatalf("buildRsyncSSHSpec=%q, want %q", got, want)
+	}
+}
+
 func TestBuildRuntimeMonitorCommand(t *testing.T) {
 	t.Parallel()
 

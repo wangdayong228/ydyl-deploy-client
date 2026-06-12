@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/csv"
@@ -20,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wangdayong228/ydyl-deploy-client/internal/utils/sshutil"
 )
 
 type CollectLogsOptions struct {
@@ -98,6 +101,14 @@ func CollectLogs(ctx context.Context, commonCfg CommonConfig, opts CollectLogsOp
 	collectedDir := filepath.Join(commonCfg.LogDir, "collected")
 	if err := os.MkdirAll(collectedDir, 0o755); err != nil {
 		return fmt.Errorf("创建 collected 目录失败: %w", err)
+	}
+
+	warmupIPs := collectLogsWarmupIPs(statuses, commonCfg.BenchClientIP)
+	if len(warmupIPs) > 0 {
+		log.Printf("👉 [collect-logs] 预热 known_hosts，目标 IP 数=%d\n", len(warmupIPs))
+		if err := sshutil.EnsureKnownHosts(ctx, warmupIPs); err != nil {
+			log.Printf("⚠️ [collect-logs] 预热 known_hosts 部分失败（将继续收集）: %v\n", err)
+		}
 	}
 
 	log.Printf("👉 [collect-logs] 开始收集，script_status 节点数=%d，可收集节点数=%d，collected 目录=%s\n",
@@ -497,6 +508,35 @@ func collectBenchClientLogs(
 	manifest.Entries = append(manifest.Entries, entry)
 }
 
+func collectLogsWarmupIPs(statuses []*ScriptStatus, benchClientIP string) []string {
+	seen := make(map[string]struct{})
+	ips := make([]string, 0)
+	add := func(ip string) {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			return
+		}
+		if _, ok := seen[ip]; ok {
+			return
+		}
+		seen[ip] = struct{}{}
+		ips = append(ips, ip)
+	}
+
+	for _, st := range statuses {
+		if st == nil {
+			continue
+		}
+		if strings.EqualFold(st.ServiceType, "xjst") && !shouldCollectXjstNodeByName(st.Name) {
+			continue
+		}
+		add(st.IP)
+	}
+	add(benchClientIP)
+	sort.Strings(ips)
+	return ips
+}
+
 func shouldCollectXjstNodeByName(name string) bool {
 	re := regexp.MustCompile(`-(\d+)$`)
 	matches := re.FindStringSubmatch(strings.TrimSpace(name))
@@ -521,7 +561,7 @@ func probeRemoteFileLines(ctx context.Context, user, keyPath, ip, remotePath str
 	if trimmed == "__MISSING__" {
 		return 0, false, nil
 	}
-	lines, parseErr := strconv.ParseInt(trimmed, 10, 64)
+	lines, parseErr := parseLastInt64Line(out)
 	if parseErr != nil {
 		return 0, false, fmt.Errorf("解析 wc 输出失败: %q", trimmed)
 	}
@@ -535,7 +575,7 @@ func gzipRemoteFile(ctx context.Context, user, keyPath, ip, remotePath, remoteTm
 }
 
 func rsyncRemoteFile(ctx context.Context, user, keyPath, ip, remotePath, localDir string) error {
-	sshSpec := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i %s", keyPath)
+	sshSpec := buildRsyncSSHSpec(keyPath)
 	src := fmt.Sprintf("%s@%s:%s", user, ip, remotePath)
 	cmd := exec.CommandContext(ctx, "rsync", "-az", "-e", sshSpec, src, localDir)
 	out, err := cmd.CombinedOutput()
@@ -550,19 +590,32 @@ func removeRemoteFile(ctx context.Context, user, keyPath, ip, remotePath string)
 	return err
 }
 
-func runSSH(ctx context.Context, user, keyPath, ip, remoteCmd string) (string, error) {
-	cmd := exec.CommandContext(ctx, "ssh",
+func collectLogsSSHArgs(keyPath string) []string {
+	return []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 		"-i", keyPath,
-		fmt.Sprintf("%s@%s", user, ip),
-		remoteCmd,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("ssh 失败: %w, output=%s", err, strings.TrimSpace(string(out)))
 	}
-	return string(out), nil
+}
+
+func buildRsyncSSHSpec(keyPath string) string {
+	parts := append([]string{"ssh"}, collectLogsSSHArgs(keyPath)...)
+	return strings.Join(parts, " ")
+}
+
+func runSSH(ctx context.Context, user, keyPath, ip, remoteCmd string) (string, error) {
+	args := append(collectLogsSSHArgs(keyPath), fmt.Sprintf("%s@%s", user, ip), remoteCmd)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ssh 失败: %w, stdout=%s, stderr=%s",
+			err, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), nil
 }
 
 func shellQuote(s string) string {
