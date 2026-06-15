@@ -200,6 +200,7 @@ go run . gen-private-key --groupID 77 --index 42 --l2type 2
   - `l1RpcUrlWs`
   - `l1BridgeHubContract`
   - `l1RegisterBridgePrivateKey`
+  - `faultGameMaxClockDuration` — OP 内置部署命令透传给 `op_pipe.sh` 的 `FAULT_GAME_MAX_CLOCK_DURATION`；为空时使用默认 `24`，非空须为无前导零且 `>=24` 的整数
 - 服务列表
   - `services[].type`
   - `services[].count`

@@ -94,6 +94,87 @@ func TestResolveL1VaultPrivateKey_DifferentDeployerDifferent(t *testing.T) {
 	}
 }
 
+func TestBuildRemoteCommandForIndex_OPIncludesFaultGameMaxClockDuration(t *testing.T) {
+	t.Parallel()
+
+	d := &Deployer{
+		cfg: DeployConfig{
+			CommonConfig: CommonConfig{
+				L1ChainId:                  "7655",
+				L1RpcUrl:                   "https://l1.example/rpc",
+				L1VaultMnemonic:            "test test test test test test test test test test test junk",
+				L1BridgeHubContract:        "0x1111111111111111111111111111111111111111",
+				L1RegisterBridgePrivateKey: "0x2222222222222222222222222222222222222222222222222222222222222222",
+				ForceDeployL2Chain:         true,
+				FaultGameMaxClockDuration:  "600",
+			},
+		},
+		l1VaultDeriveRand: 1,
+	}
+
+	got, err := d.buildRemoteCommandForIndex(nil, 0, ServiceConfig{
+		Type: enums.ServiceTypeOP,
+	})
+	if err != nil {
+		t.Fatalf("buildRemoteCommandForIndex returned error: %v", err)
+	}
+	if !strings.Contains(got, "FAULT_GAME_MAX_CLOCK_DURATION=600 ./op_pipe.sh") {
+		t.Fatalf("OP remote command should pass FAULT_GAME_MAX_CLOCK_DURATION, got=%s", got)
+	}
+	if !strings.Contains(got, "FORCE_DEPLOY_OP=true") {
+		t.Fatalf("OP remote command should pass FORCE_DEPLOY_OP, got=%s", got)
+	}
+	if strings.Contains(got, "FORCE_DEPLOY_CDK=true") {
+		t.Fatalf("OP remote command should not pass FORCE_DEPLOY_CDK, got=%s", got)
+	}
+}
+
+func TestDeployConfigCheckValid_FaultGameMaxClockDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "empty uses remote default"},
+		{name: "minimum", value: "24"},
+		{name: "larger value", value: "600"},
+		{name: "below minimum", value: "10", wantErr: true},
+		{name: "leading zero below minimum", value: "09", wantErr: true},
+		{name: "leading zero otherwise valid", value: "024", wantErr: true},
+		{name: "not numeric", value: "abc", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := DeployConfig{
+				CommonConfig: CommonConfig{
+					FaultGameMaxClockDuration: tt.value,
+				},
+				Services: []ServiceConfig{
+					{
+						Type:         enums.ServiceTypeOP,
+						InstanceType: []string{"c6a.4xlarge"},
+						Count:        1,
+					},
+				},
+			}
+
+			err := cfg.CheckValid()
+			if tt.wantErr && err == nil {
+				t.Fatalf("CheckValid expected error for value %q", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("CheckValid returned unexpected error for value %q: %v", tt.value, err)
+			}
+		})
+	}
+}
+
 func TestResolveXjstGroupIps(t *testing.T) {
 	t.Parallel()
 

@@ -3,10 +3,12 @@ package deploy
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nft-rainbow/rainbow-goutils/utils/configutils"
+	"github.com/spf13/viper"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/constants/enums"
 )
 
@@ -77,6 +79,7 @@ type CommonConfig struct {
 	DryRun                     bool   `yaml:"dryRun"`
 	ForceDeployL2Chain         bool   `yaml:"forceDeployL2Chain"`
 	EnableGenAccounts          bool   `yaml:"enableGenAccounts"`
+	FaultGameMaxClockDuration  string `yaml:"faultGameMaxClockDuration" mapstructure:"faultGameMaxClockDuration,omitempty"`
 }
 
 // DeployConfig 描述一次 deploy 命令所需的全部参数
@@ -87,6 +90,9 @@ type DeployConfig struct {
 }
 
 func (c *DeployConfig) CheckValid() error {
+	if err := validateFaultGameMaxClockDuration(c.FaultGameMaxClockDuration); err != nil {
+		return err
+	}
 	for _, s := range c.Services {
 		if err := s.CheckValid(); err != nil {
 			return err
@@ -95,7 +101,22 @@ func (c *DeployConfig) CheckValid() error {
 	return nil
 }
 
+func validateFaultGameMaxClockDuration(value string) error {
+	if value == "" {
+		return nil
+	}
+	if value[0] == '0' {
+		return fmt.Errorf("faultGameMaxClockDuration must be a positive integer without leading zeros and >= 24, got %q", value)
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 24 {
+		return fmt.Errorf("faultGameMaxClockDuration must be a positive integer without leading zeros and >= 24, got %q", value)
+	}
+	return nil
+}
+
 // LoadConfigFromFile 从 YAML 文件加载配置并转换为内部 DeployConfig 结构
 func LoadConfigFromFile(path string) *DeployConfig {
+	viper.SetDefault("faultGameMaxClockDuration", "")
 	return configutils.MustLoadByFile[DeployConfig](path)
 }

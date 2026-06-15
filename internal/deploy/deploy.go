@@ -957,7 +957,7 @@ func (d *Deployer) tagInstanceName(instanceID, name string) error {
 // 当前实现：
 //   - generic: 必须在配置中显式设置 remoteCmd，否则报错；
 //   - op: 如果未配置 remoteCmd，则为每一台机器生成不同的 PRIVATE_KEY 和 L2_CHAIN_ID，
-//     命令为：cd /home/ubuntu/op-work/scripts/deploy-op-stack && PRIVATE_KEY=<pk> L2_CHAIN_ID=<id> ./deploy-with-env.sh
+//     并将通用配置中的 OP 环境变量传给 op_pipe.sh。
 //
 // 后续可在此扩展 cdk / xjst 等模式。
 func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc ServiceConfig) (string, error) {
@@ -976,9 +976,13 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 			return "", fmt.Errorf("生成 L1_VAULT_PRIVATE_KEY 失败: %w", err)
 		}
 		l1RpcUrl := d.resolveL1RpcUrl(common.L1RpcUrl, svc.L1RpcUrl)
+		faultGameMaxClockDurationEnv := ""
+		if common.FaultGameMaxClockDuration != "" {
+			faultGameMaxClockDurationEnv = fmt.Sprintf(" FAULT_GAME_MAX_CLOCK_DURATION=%s", common.FaultGameMaxClockDuration)
+		}
 		return fmt.Sprintf(
-			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ENABLE_GEN_ACC=%t ./op_pipe.sh",
-			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts,
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_OP=%t ENABLE_GEN_ACC=%t%s ./op_pipe.sh",
+			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts, faultGameMaxClockDurationEnv,
 		), nil
 	case enums.ServiceTypeCDK:
 		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh

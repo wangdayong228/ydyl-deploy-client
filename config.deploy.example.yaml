@@ -27,14 +27,14 @@ l1RegisterBridgePrivateKey: 0xa3d9e98f0ba98960bf3755b7519d18b2250b0b8be5e38d5483
 dryRun: false
 forceDeployL2Chain: false
 enableGenAccounts: false
+faultGameMaxClockDuration: "" # OP dispute game 棋钟上限秒数；为空时使用 op_pipe.sh 默认 24；非空须为无前导零且 >=24 的整数，示例: "600"
 
 # services 为一个数组，每个元素表示一种 service 类型及其数量和命令
 services:
   # 1) OP 部署：不显式设置 remote_cmd，则使用内置策略
   #    每台机器生成不同的 PRIVATE_KEY 和 L2_CHAIN_ID=10000+i
   #    命令示意：
-  #      cd /home/ubuntu/op-work/scripts/deploy-op-stack &&
-  #      PRIVATE_KEY=<pk> L2_CHAIN_ID=<id> ./deploy-with-env.sh
+  #      L2_CHAIN_ID=<id> ... FAULT_GAME_MAX_CLOCK_DURATION=<seconds> ./op_pipe.sh
   # - type: op
   #   count: 1
   #   ami: ami-01695c193bcf5ba8e
@@ -73,5 +73,3 @@ services:
   #   keyName: dayong-op-stack                # 对应本地 ~/.ssh/dayong-op-stack.pem
   #   tagPrefix: dy-op
   #   remoteCmd: "ls -la"
-
-
