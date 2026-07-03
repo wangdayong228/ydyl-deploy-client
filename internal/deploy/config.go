@@ -79,6 +79,7 @@ type CommonConfig struct {
 	DryRun                     bool   `yaml:"dryRun"`
 	ForceDeployL2Chain         bool   `yaml:"forceDeployL2Chain"`
 	EnableGenAccounts          bool   `yaml:"enableGenAccounts"`
+	CdkUseRealProver           bool   `yaml:"cdkUseRealProver"`
 	FaultGameMaxClockDuration  string `yaml:"faultGameMaxClockDuration" mapstructure:"faultGameMaxClockDuration,omitempty"`
 }
 

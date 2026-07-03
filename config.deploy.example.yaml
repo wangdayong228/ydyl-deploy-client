@@ -27,6 +27,7 @@ l1RegisterBridgePrivateKey: 0xa3d9e98f0ba98960bf3755b7519d18b2250b0b8be5e38d5483
 dryRun: false
 forceDeployL2Chain: false
 enableGenAccounts: false
+cdkUseRealProver: false # CDK 是否使用真实 verifier；false 时启动 mock zkevm-prover（透传为 USE_REAL_PROVER）
 faultGameMaxClockDuration: "" # OP dispute game 棋钟上限秒数；为空时使用 op_pipe.sh 默认 24；非空须为无前导零且 >=24 的整数，示例: "600"
 
 # services 为一个数组，每个元素表示一种 service 类型及其数量和命令
@@ -45,7 +46,7 @@ services:
   #   l1VaultFundAmount: "10000"
 
   # # 2) CDK 部署：这里显式配置 remote_cmd
-  # # L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh
+  # # L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false ENABLE_GEN_ACC=false USE_REAL_PROVER=false START_STEP=1 ./cdk_pipe.sh
   # - type: cdk
   #   count: 1
   #   ami: ami-01175d2eebb73e5a3

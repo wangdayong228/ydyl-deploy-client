@@ -127,6 +127,64 @@ func TestBuildRemoteCommandForIndex_OPIncludesFaultGameMaxClockDuration(t *testi
 	if strings.Contains(got, "FORCE_DEPLOY_CDK=true") {
 		t.Fatalf("OP remote command should not pass FORCE_DEPLOY_CDK, got=%s", got)
 	}
+	if strings.Contains(got, "USE_REAL_PROVER=") {
+		t.Fatalf("OP remote command should not pass USE_REAL_PROVER, got=%s", got)
+	}
+}
+
+func TestBuildRemoteCommandForIndex_CDKIncludesUseRealProverFalse(t *testing.T) {
+	t.Parallel()
+
+	d := &Deployer{
+		cfg: DeployConfig{
+			CommonConfig: CommonConfig{
+				L1ChainId:                  "7655",
+				L1RpcUrl:                   "https://l1.example/rpc",
+				L1VaultMnemonic:            "test test test test test test test test test test test junk",
+				L1BridgeHubContract:        "0x1111111111111111111111111111111111111111",
+				L1RegisterBridgePrivateKey: "0x2222222222222222222222222222222222222222222222222222222222222222",
+			},
+		},
+		l1VaultDeriveRand: 1,
+	}
+
+	got, err := d.buildRemoteCommandForIndex(nil, 0, ServiceConfig{
+		Type: enums.ServiceTypeCDK,
+	})
+	if err != nil {
+		t.Fatalf("buildRemoteCommandForIndex returned error: %v", err)
+	}
+	if !strings.Contains(got, "USE_REAL_PROVER=false ./cdk_pipe.sh") {
+		t.Fatalf("CDK remote command should pass default USE_REAL_PROVER=false, got=%s", got)
+	}
+}
+
+func TestBuildRemoteCommandForIndex_CDKIncludesUseRealProverTrue(t *testing.T) {
+	t.Parallel()
+
+	d := &Deployer{
+		cfg: DeployConfig{
+			CommonConfig: CommonConfig{
+				L1ChainId:                  "7655",
+				L1RpcUrl:                   "https://l1.example/rpc",
+				L1VaultMnemonic:            "test test test test test test test test test test test junk",
+				L1BridgeHubContract:        "0x1111111111111111111111111111111111111111",
+				L1RegisterBridgePrivateKey: "0x2222222222222222222222222222222222222222222222222222222222222222",
+				CdkUseRealProver:           true,
+			},
+		},
+		l1VaultDeriveRand: 1,
+	}
+
+	got, err := d.buildRemoteCommandForIndex(nil, 0, ServiceConfig{
+		Type: enums.ServiceTypeCDK,
+	})
+	if err != nil {
+		t.Fatalf("buildRemoteCommandForIndex returned error: %v", err)
+	}
+	if !strings.Contains(got, "USE_REAL_PROVER=true ./cdk_pipe.sh") {
+		t.Fatalf("CDK remote command should pass USE_REAL_PROVER=true, got=%s", got)
+	}
 }
 
 func TestDeployConfigCheckValid_FaultGameMaxClockDuration(t *testing.T) {

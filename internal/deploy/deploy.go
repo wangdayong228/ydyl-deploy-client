@@ -985,7 +985,7 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts, faultGameMaxClockDurationEnv,
 		), nil
 	case enums.ServiceTypeCDK:
-		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false START_STEP=1 ./cdk_pipe.sh
+		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false USE_REAL_PROVER=false START_STEP=1 ./cdk_pipe.sh
 		l2ChainID := d.resolveL2ChainID(svc.Type, i)
 		l1VaultPrivateKey, err := d.resolveL1VaultPrivateKey(common.L1VaultMnemonic, svc.Type, l2ChainID)
 		if err != nil {
@@ -993,8 +993,8 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 		}
 		l1RpcUrl := d.resolveL1RpcUrl(common.L1RpcUrl, svc.L1RpcUrl)
 		return fmt.Sprintf(
-			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ENABLE_GEN_ACC=%t ./cdk_pipe.sh",
-			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts,
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ENABLE_GEN_ACC=%t USE_REAL_PROVER=%t ./cdk_pipe.sh",
+			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts, common.CdkUseRealProver,
 		), nil
 	case enums.ServiceTypeXJST:
 		groupId := d.resolveXjstGroupId(i)
