@@ -1,4 +1,5 @@
 config.deploy.yaml
+config.deploy.cfxmainnet.yaml
 logs
 logs-*
 AGENT.md
