@@ -27,6 +27,11 @@ l1RegisterBridgePrivateKey: 0xa3d9e98f0ba98960bf3755b7519d18b2250b0b8be5e38d5483
 dryRun: false
 forceDeployL2Chain: false
 enableGenAccounts: false
+enableBridge: true # XJST 专用；false 时跳过 L1 跨链打款与 Counter/bridge 注册（透传 ENABLE_BRIDGE）
+# step2 L1 目标余额（ether）。省略则 pipe 用默认 5000/1000/1000；0 表示跳过该笔。
+l1FundVaultEth: 5000
+l1FundClaimServiceEth: 1000
+l1FundRegisterBridgeEth: 1000
 cdkUseRealProver: false # CDK 是否使用真实 verifier；false 时启动 mock zkevm-prover（透传为 USE_REAL_PROVER）
 faultGameMaxClockDuration: "" # OP dispute game 棋钟上限秒数；为空时使用 op_pipe.sh 默认 24；非空须为无前导零且 >=24 的整数，示例: "600"
 

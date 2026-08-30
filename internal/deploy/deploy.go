@@ -981,8 +981,8 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 			faultGameMaxClockDurationEnv = fmt.Sprintf(" FAULT_GAME_MAX_CLOCK_DURATION=%s", common.FaultGameMaxClockDuration)
 		}
 		return fmt.Sprintf(
-			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_OP=%t ENABLE_GEN_ACC=%t%s ./op_pipe.sh",
-			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts, faultGameMaxClockDurationEnv,
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_OP=%t ENABLE_GEN_ACC=%t%s%s ./op_pipe.sh",
+			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts, faultGameMaxClockDurationEnv, d.l1FundEnvFragment(),
 		), nil
 	case enums.ServiceTypeCDK:
 		// L2_CHAIN_ID=2025121101 L1_CHAIN_ID=3151908 L1_RPC_URL=https://eth.yidaiyilu0.site/rpc L1_VAULT_PRIVATE_KEY=0x04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59 L1_BRIDGE_HUB_CONTRACT=0x2634d61774eC4D4b721259e6ec2Ba1801733201C L1_REGISTER_BRIDGE_PRIVATE_KEY=0x9abda6411083c4e3391a7e93a9c1cfa6cf8364a04b44668854bb82c9d6d2dce0 DRYRUN=false FORCE_DEPLOY_CDK=false USE_REAL_PROVER=false START_STEP=1 ./cdk_pipe.sh
@@ -993,8 +993,8 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 		}
 		l1RpcUrl := d.resolveL1RpcUrl(common.L1RpcUrl, svc.L1RpcUrl)
 		return fmt.Sprintf(
-			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ENABLE_GEN_ACC=%t USE_REAL_PROVER=%t ./cdk_pipe.sh",
-			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts, common.CdkUseRealProver,
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && L2_CHAIN_ID=%d L1_CHAIN_ID=%v L1_RPC_URL=%s L1_VAULT_PRIVATE_KEY=%s L1_BRIDGE_HUB_CONTRACT=%s L1_REGISTER_BRIDGE_PRIVATE_KEY=%s DRYRUN=%t FORCE_DEPLOY_CDK=%t ENABLE_GEN_ACC=%t USE_REAL_PROVER=%t%s ./cdk_pipe.sh",
+			l2ChainID, common.L1ChainId, l1RpcUrl, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.DryRun, common.ForceDeployL2Chain, common.EnableGenAccounts, common.CdkUseRealProver, d.l1FundEnvFragment(),
 		), nil
 	case enums.ServiceTypeXJST:
 		groupId := d.resolveXjstGroupId(i)
@@ -1023,8 +1023,8 @@ func (d *Deployer) buildRemoteCommandForIndex(globalIps []string, i int, svc Ser
 		nodeId := i%4 + 1
 
 		return fmt.Sprintf(
-			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && CHAIN_NODE_IPS='%s' NODE_ID='node-%d' GROUP_ID=%d L1_RPC_URL_WS='%s' L1_RPC_URL='%s' AUTO_DEPLOY_L1_CONTRACTS='false' L2_CHAIN_ID=0 L1_CHAIN_ID=%v L1_VAULT_PRIVATE_KEY='%s' L1_BRIDGE_HUB_CONTRACT='%s' L1_REGISTER_BRIDGE_PRIVATE_KEY='%s' ENABLE_GEN_ACC='%t' BRIDGE_GAS_PRICE=100000000000 ./xjst_pipe.sh",
-			groupIpsStr, nodeId, groupId, l1RpcUrlWs, l1RpcUrl, common.L1ChainId, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.EnableGenAccounts,
+			" git pull && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git submodule update --init --recursive --force && CHAIN_NODE_IPS='%s' NODE_ID='node-%d' GROUP_ID=%d L1_RPC_URL_WS='%s' L1_RPC_URL='%s' AUTO_DEPLOY_L1_CONTRACTS='false' L2_CHAIN_ID=0 L1_CHAIN_ID=%v L1_VAULT_PRIVATE_KEY='%s' L1_BRIDGE_HUB_CONTRACT='%s' L1_REGISTER_BRIDGE_PRIVATE_KEY='%s' ENABLE_GEN_ACC='%t' ENABLE_BRIDGE='%t'%s BRIDGE_GAS_PRICE=100000000000 ./xjst_pipe.sh",
+			groupIpsStr, nodeId, groupId, l1RpcUrlWs, l1RpcUrl, common.L1ChainId, cryptoutil.EcdsaPrivToWeb3Hex(l1VaultPrivateKey), common.L1BridgeHubContract, common.L1RegisterBridgePrivateKey, common.EnableGenAccounts, d.resolveEnableBridge(), d.l1FundEnvFragment(),
 		), nil
 
 	default:
@@ -1180,6 +1180,28 @@ func (d *Deployer) resolveL1RpcUrl(commonL1RpcUrl, svcL1RpcUrl string) string {
 		l1RpcUrl = svcL1RpcUrl
 	}
 	return l1RpcUrl
+}
+
+// resolveEnableBridge 返回 XJST ENABLE_BRIDGE 透传值；yaml 省略时默认 true。
+func (d *Deployer) resolveEnableBridge() bool {
+	if d.cfg.EnableBridge == nil {
+		return true
+	}
+	return *d.cfg.EnableBridge
+}
+
+// l1FundEnvFragment 仅在 yaml 显式设置时透传 L1_FUND_*_ETH；省略则让 pipe 使用默认值。
+func (d *Deployer) l1FundEnvFragment() string {
+	var b strings.Builder
+	appendIntEnv := func(name string, v *int) {
+		if v != nil {
+			fmt.Fprintf(&b, " %s=%d", name, *v)
+		}
+	}
+	appendIntEnv("L1_FUND_VAULT_ETH", d.cfg.L1FundVaultEth)
+	appendIntEnv("L1_FUND_CLAIM_SERVICE_ETH", d.cfg.L1FundClaimServiceEth)
+	appendIntEnv("L1_FUND_REGISTER_BRIDGE_ETH", d.cfg.L1FundRegisterBridgeEth)
+	return b.String()
 }
 
 // deployMultiError 汇总多台机器的部署错误（每台机器一条）。

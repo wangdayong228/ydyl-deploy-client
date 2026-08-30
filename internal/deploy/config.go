@@ -79,8 +79,13 @@ type CommonConfig struct {
 	DryRun                     bool   `yaml:"dryRun"`
 	ForceDeployL2Chain         bool   `yaml:"forceDeployL2Chain"`
 	EnableGenAccounts          bool   `yaml:"enableGenAccounts"`
+	EnableBridge               *bool  `yaml:"enableBridge"` // XJST：透传 ENABLE_BRIDGE；省略时默认 true
 	CdkUseRealProver           bool   `yaml:"cdkUseRealProver"`
 	FaultGameMaxClockDuration  string `yaml:"faultGameMaxClockDuration" mapstructure:"faultGameMaxClockDuration,omitempty"`
+	// step2 L1 目标余额（ether）。指针：省略则不透传（pipe 用默认 5000/1000/1000）；0 表示跳过该笔。
+	L1FundVaultEth          *int `yaml:"l1FundVaultEth"`
+	L1FundClaimServiceEth   *int `yaml:"l1FundClaimServiceEth"`
+	L1FundRegisterBridgeEth *int `yaml:"l1FundRegisterBridgeEth"`
 }
 
 // DeployConfig 描述一次 deploy 命令所需的全部参数
@@ -94,10 +99,26 @@ func (c *DeployConfig) CheckValid() error {
 	if err := validateFaultGameMaxClockDuration(c.FaultGameMaxClockDuration); err != nil {
 		return err
 	}
+	if err := validateNonNegativeIntPtr("l1FundVaultEth", c.L1FundVaultEth); err != nil {
+		return err
+	}
+	if err := validateNonNegativeIntPtr("l1FundClaimServiceEth", c.L1FundClaimServiceEth); err != nil {
+		return err
+	}
+	if err := validateNonNegativeIntPtr("l1FundRegisterBridgeEth", c.L1FundRegisterBridgeEth); err != nil {
+		return err
+	}
 	for _, s := range c.Services {
 		if err := s.CheckValid(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateNonNegativeIntPtr(name string, v *int) error {
+	if v != nil && *v < 0 {
+		return fmt.Errorf("%s must be a non-negative integer, got %d", name, *v)
 	}
 	return nil
 }
