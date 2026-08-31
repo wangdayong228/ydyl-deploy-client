@@ -56,6 +56,11 @@ l1RegisterBridgePrivateKey: "0x1111111111111111111111111111111111111111111111111
 dryRun: true
 forceDeployL2Chain: false
 enableGenAccounts: false
+enableBridge: true
+cdkUseRealProver: false
+l1FundVaultEth: 5000
+l1FundClaimServiceEth: 1000
+l1FundRegisterBridgeEth: 1000
 services: []
 `
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
+	"github.com/wangdayong228/ydyl-deploy-client/internal/precheck"
 )
 
 var (
@@ -37,6 +38,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	clientLogFile := clientLogPath(cfg.CommonConfig.LogDir, "deploy")
 
 	return withClientCommandTee(clientLogFile, func() error {
+		if err := precheck.Run(ctx, precheck.Params{ConfigPath: configPath}); err != nil {
+			fmt.Fprintln(os.Stderr, "deploy 预检失败：", err)
+			return err
+		}
+
 		opts := deploy.RunOptions{}
 		if serversCreatePath != "" {
 			origAbs, err := filepath.Abs(serversCreatePath)
