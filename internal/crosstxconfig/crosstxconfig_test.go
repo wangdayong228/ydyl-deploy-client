@@ -125,6 +125,11 @@ l1RegisterBridgePrivateKey: "0x1111111111111111111111111111111111111111111111111
 dryRun: true
 forceDeployL2Chain: false
 enableGenAccounts: false
+enableBridge: true
+cdkUseRealProver: false
+l1FundVaultEth: 0
+l1FundClaimServiceEth: 0
+l1FundRegisterBridgeEth: 0
 services: []
 `
 	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))

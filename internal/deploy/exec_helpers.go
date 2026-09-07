@@ -10,7 +10,7 @@ import (
 
 const (
 	remoteLogDirDefault              = "/home/ubuntu/ydyl-deploy-logs"
-	remoteRepoDirDefault             = "/home/ubuntu/workspace/ydyl-deployment-suite"
+	RemoteRepoDirDefault             = "/home/ubuntu/workspace/ydyl-deployment-suite"
 	remoteMonitorScriptMissingMarker = "__MONITOR_SCRIPT_MISSING__"
 	remoteMonitorExitEarlyMarker     = "__MONITOR_EXIT_EARLY__"
 )
@@ -34,7 +34,7 @@ func buildBackgroundCommand(runDuration time.Duration, cmd, remoteLogDir, remote
 		"sudo -n shutdown -h +%d; mkdir -p %s; cd %s; nohup %s > %s 2>&1 & echo $!",
 		int(runDuration.Minutes()),
 		remoteLogDir,
-		remoteRepoDirDefault,
+		RemoteRepoDirDefault,
 		cmd,
 		remoteLogFile,
 	)
@@ -51,12 +51,12 @@ func buildRuntimeLogPath(name string) string {
 
 func buildRuntimeMonitorCommand(serviceType enums.ServiceType, index int, name string) (string, bool) {
 	output := buildRuntimeLogPath(name)
-	scriptPath := fmt.Sprintf("%s/ydyl-scripts-lib/log_monitor_runtime.sh", remoteRepoDirDefault)
+	scriptPath := fmt.Sprintf("%s/ydyl-scripts-lib/log_monitor_runtime.sh", RemoteRepoDirDefault)
 	buildStartCmd := func(args string) string {
 		return fmt.Sprintf(
 			"mkdir -p %s; cd %s; for i in $(seq 1 180); do [ -f %s ] && break; sleep 2; done; [ -f %s ] || { echo %s; exit 1; }; nohup bash %s %s >/dev/null 2>&1 & pid=$!; sleep 1; kill -0 \"$pid\" >/dev/null 2>&1 || { echo %s; exit 1; }; echo \"$pid\"",
 			remoteLogDirDefault,
-			remoteRepoDirDefault,
+			RemoteRepoDirDefault,
 			scriptPath,
 			scriptPath,
 			remoteMonitorScriptMissingMarker,

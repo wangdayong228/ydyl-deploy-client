@@ -394,7 +394,7 @@ func remoteBenchClientLogDir(commonCfg CommonConfig) string {
 	if logDir == "" {
 		logDir = "logs"
 	}
-	return filepath.ToSlash(filepath.Join(remoteRepoDirDefault, "ydyl-deploy-client", logDir, "client"))
+	return filepath.ToSlash(filepath.Join(RemoteRepoDirDefault, "ydyl-deploy-client", logDir, "client"))
 }
 
 func benchClientLocalDirName(ip string) string {

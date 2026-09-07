@@ -906,12 +906,23 @@ func (d *Deployer) buildInstanceName(tagPrefix, serviceType string, ordinal int)
 }
 
 func buildSSHKeyPath(cfg CommonConfig) string {
+	return SSHKeyPath(cfg)
+}
+
+// SSHKeyPath 返回 CommonConfig 对应的 SSH 私钥路径。
+// sshKeyDir 为空时使用 ~/.ssh/{keyName}.pem。
+func SSHKeyPath(cfg CommonConfig) string {
 	keyDir := cfg.SSHKeyDir
 	if keyDir == "" {
 		home, _ := os.UserHomeDir()
 		keyDir = filepath.Join(home, ".ssh")
 	}
 	return filepath.Join(keyDir, cfg.KeyName+".pem")
+}
+
+// SSHMaxConcurrency 返回 SSH 并发上限；未配置或 <=0 时使用 deploy 默认值。
+func SSHMaxConcurrency(cfg CommonConfig) int {
+	return resolveSSHMaxConcurrency(cfg)
 }
 
 func (d *Deployer) findInstanceByIP(ip string) (string, error) {
