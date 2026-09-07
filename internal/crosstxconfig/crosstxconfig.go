@@ -386,8 +386,8 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 	}
 }
 
-// GenerateJobs 生成 jobs：源链遍历所有链，目标链默认随机选取且不为自身；
-// 当源链为 xjst 时，目标链固定为源链自身。
+// GenerateJobs 生成 jobs：源链遍历所有链，目标链为全体链实例的 derangement
+// （源 ≠ 目标，每个链实例作为 target 恰好一次；op/cdk/xjst 可互跨）。
 // 助记词在内部随机生成一次（12 words），所有 jobs 复用同一个。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
 func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string, l1RPC string) ([]Job, error) {
@@ -397,31 +397,19 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 		return nil, err
 	}
 
+	assignment, err := assignUniqueTargets(chainKeys)
+	if err != nil {
+		return nil, err
+	}
+
 	jobs := make([]Job, 0, len(chainKeys))
 	for _, srcKey := range chainKeys {
 		source := infos[srcKey]
-		dstType := srcKey
-		if source.Type != "xjst" {
-			targetCandidates := make([]string, 0, len(chainKeys)-1)
-			for _, candidate := range chainKeys {
-				if candidate == srcKey {
-					continue
-				}
-				targetCandidates = append(targetCandidates, candidate)
-			}
-			if len(targetCandidates) == 0 {
-				continue
-			}
-
-			var err error
-			dstType, err = pickRandomTarget(targetCandidates)
-			if err != nil {
-				// 随机数获取失败时回退到第一个候选目标，避免中断配置生成。
-				dstType = targetCandidates[0]
-			}
+		dstKey, ok := assignment[srcKey]
+		if !ok {
+			return nil, fmt.Errorf("目标链分配缺失: source=%s", srcKey)
 		}
-
-		target := infos[dstType]
+		target := infos[dstKey]
 
 		job := Job{
 			TargetL1Bridge:                  target.Contracts.L1BridgeReceiveContract.Hex(),
@@ -454,16 +442,35 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 	return jobs, nil
 }
 
-func pickRandomTarget(candidates []string) (string, error) {
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("候选目标链为空")
+func assignUniqueTargets(chainKeys []string) (map[string]string, error) {
+	if len(chainKeys) < 2 {
+		return nil, fmt.Errorf("可用链数量不足（需要至少 2 条链），当前=%d", len(chainKeys))
 	}
 
-	nBig, err := rand.Int(rand.Reader, big.NewInt(int64(len(candidates))))
-	if err != nil {
-		return "", err
+	shuffled := append([]string(nil), chainKeys...)
+	if err := cryptoShuffle(shuffled); err != nil {
+		shuffled = append([]string(nil), chainKeys...)
+		sort.Strings(shuffled)
 	}
-	return candidates[int(nBig.Int64())], nil
+
+	n := len(shuffled)
+	assignment := make(map[string]string, n)
+	for i, src := range shuffled {
+		assignment[src] = shuffled[(i+1)%n]
+	}
+	return assignment, nil
+}
+
+func cryptoShuffle(items []string) error {
+	for i := len(items) - 1; i > 0; i-- {
+		nBig, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return err
+		}
+		j := int(nBig.Int64())
+		items[i], items[j] = items[j], items[i]
+	}
+	return nil
 }
 
 func replaceLocalhostWithIP(rawURL, ip string) string {

@@ -228,16 +228,12 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, jobs, 3)
+	assertUniqueNonSelfTargets(t, jobs)
 	var firstMnemonic string
 	seenSources := make(map[string]struct{}, len(chainTypes))
 	for _, j := range jobs {
 		require.NotEmpty(t, j.SourceL2ChainType)
 		require.NotEmpty(t, j.TargetL2ChainType)
-		if j.SourceL2ChainType == "xjst" {
-			require.Equal(t, "xjst", j.TargetL2ChainType)
-		} else {
-			require.NotEqual(t, j.SourceL2ChainType, j.TargetL2ChainType)
-		}
 		require.NotEmpty(t, j.Mnemonic)
 		if firstMnemonic == "" {
 			firstMnemonic = j.Mnemonic
@@ -276,6 +272,95 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, l1RPC, j.L1RPC)
 	}
 	require.Len(t, seenSources, len(chainTypes))
+}
+
+func assertUniqueNonSelfTargets(t *testing.T, jobs []Job) {
+	t.Helper()
+
+	seenSources := make(map[string]struct{}, len(jobs))
+	seenTargets := make(map[string]struct{}, len(jobs))
+	for _, j := range jobs {
+		require.NotEmpty(t, j.SourceL2RPC)
+		require.NotEmpty(t, j.TargetL2RPC)
+		require.NotEqual(t, j.SourceL2RPC, j.TargetL2RPC, "源链不能指向自身: source=%s", j.SourceL2RPC)
+		_, sourceExists := seenSources[j.SourceL2RPC]
+		require.False(t, sourceExists, "重复源链 RPC: %s", j.SourceL2RPC)
+		seenSources[j.SourceL2RPC] = struct{}{}
+		_, targetExists := seenTargets[j.TargetL2RPC]
+		require.False(t, targetExists, "重复目标链 RPC: %s", j.TargetL2RPC)
+		seenTargets[j.TargetL2RPC] = struct{}{}
+	}
+	require.Len(t, seenTargets, len(jobs))
+}
+
+func TestGenerateJobs_UniqueTargetsNotSelf_Repeated(t *testing.T) {
+	chainKeys := []string{"op", "cdk", "xjst"}
+	infos := map[string]*ChainInfo{
+		"op":   newTestChainInfo("op", "1.1.1.1", "1"),
+		"cdk":  newTestChainInfo("cdk", "2.2.2.2", "2"),
+		"xjst": newTestChainInfo("xjst", "3.3.3.3", "3"),
+	}
+
+	for i := 0; i < 20; i++ {
+		jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+		require.NoError(t, err)
+		require.Len(t, jobs, 3)
+		assertUniqueNonSelfTargets(t, jobs)
+	}
+}
+
+func TestGenerateJobs_SameTypeInstances_UniqueByRPC(t *testing.T) {
+	chainKeys := []string{"ydyl-op-1", "ydyl-op-2", "ydyl-cdk-1"}
+	infos := map[string]*ChainInfo{
+		"ydyl-op-1":  newTestChainInfo("op", "1.1.1.1", "1"),
+		"ydyl-op-2":  newTestChainInfo("op", "1.1.1.2", "a"),
+		"ydyl-cdk-1": newTestChainInfo("cdk", "2.2.2.1", "2"),
+	}
+
+	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+	require.NoError(t, err)
+	require.Len(t, jobs, 3)
+	assertUniqueNonSelfTargets(t, jobs)
+
+	sourceTypes := make(map[string]int)
+	targetTypes := make(map[string]int)
+	for _, j := range jobs {
+		sourceTypes[j.SourceL2ChainType]++
+		targetTypes[j.TargetL2ChainType]++
+	}
+	require.Equal(t, 2, sourceTypes["op"])
+	require.Equal(t, 1, sourceTypes["cdk"])
+	require.Equal(t, 2, targetTypes["op"])
+	require.Equal(t, 1, targetTypes["cdk"])
+}
+
+func TestAssignUniqueTargets_Derangement(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	assignment, err := assignUniqueTargets(keys)
+	require.NoError(t, err)
+	require.Len(t, assignment, 3)
+
+	seen := make(map[string]struct{}, len(keys))
+	for _, src := range keys {
+		dst, ok := assignment[src]
+		require.True(t, ok)
+		require.NotEqual(t, src, dst)
+		_, exists := seen[dst]
+		require.False(t, exists)
+		seen[dst] = struct{}{}
+	}
+}
+
+func TestAssignUniqueTargets_TwoKeysSwap(t *testing.T) {
+	assignment, err := assignUniqueTargets([]string{"op", "xjst"})
+	require.NoError(t, err)
+	require.Equal(t, "xjst", assignment["op"])
+	require.Equal(t, "op", assignment["xjst"])
+}
+
+func TestAssignUniqueTargets_RequiresAtLeastTwo(t *testing.T) {
+	_, err := assignUniqueTargets([]string{"only"})
+	require.Error(t, err)
 }
 
 func TestGenerateJobs_WaitForReceipts_BySourceChainType(t *testing.T) {
