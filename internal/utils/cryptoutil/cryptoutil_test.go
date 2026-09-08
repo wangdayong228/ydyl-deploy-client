@@ -93,3 +93,43 @@ func TestBuildDeterministicPrivateKey_RejectsTooLargeIndex(t *testing.T) {
 		t.Fatal("expected index overflow error")
 	}
 }
+
+func TestAddressFromPrivateKey_EVMVector(t *testing.T) {
+	pk, err := BuildDeterministicPrivateKey(0, 10000, big.NewInt(200000), 1)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	got, err := AddressFromPrivateKey(pk, 1)
+	if err != nil {
+		t.Fatalf("addr: %v", err)
+	}
+	want := "0xfc737023702a09c01260252d853033ccaa587b5d"
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+}
+
+func TestAddressFromPrivateKey_XJSTVector(t *testing.T) {
+	pk, err := BuildDeterministicPrivateKey(1, 0, big.NewInt(12345), 2)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	got, err := AddressFromPrivateKey(pk, 2)
+	if err != nil {
+		t.Fatalf("addr: %v", err)
+	}
+	want := "0x1d22176670f087456f2760405469b25917eed45b"
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+}
+
+func TestAddressFromPrivateKey_RejectsInvalidL2Type(t *testing.T) {
+	pk, err := BuildDeterministicPrivateKey(0, 1, big.NewInt(1), 1)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	if _, err := AddressFromPrivateKey(pk, 3); err == nil {
+		t.Fatal("expected invalid l2type error")
+	}
+}

@@ -166,6 +166,8 @@ go run . tps --config ./7s_jobs.gen.json
   - 校验 jobs JSON 后执行 `docker compose up --build tps`
 - `gen-private-key`
   - 按 `ydyl-gen-accounts` 的 deterministic 规则生成私钥；`l2type=0/1` 使用 `chainID`，`l2type=2` 使用 `groupID`
+- `sample-wallets`
+  - 按 `--l2type` 从 `servers.json` 入口链中随机挑 1 条，抽取 10 个确定性账户并查询 L2 余额
 
 示例：
 
@@ -175,6 +177,12 @@ go run . gen-private-key --chainID 324 --index 42 --l2type 0
 
 # XJST：使用 groupID
 go run . gen-private-key --groupID 77 --index 42 --l2type 2
+
+# 抽查 OP 链 10 个确定性账户的地址和余额
+go run . sample-wallets --l2type 1
+
+# 抽查 XJST（仅 node-1），扩大 index 上限
+go run . sample-wallets --servers ./output/servers.json --l2type 2 --max-index 20000000
 ```
 
 ## 配置文件

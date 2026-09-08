@@ -7,6 +7,8 @@ import (
 	"math"
 	"math/big"
 	"strings"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 func EcdsaPrivToWeb3Hex(priv *ecdsa.PrivateKey) string {
@@ -43,6 +45,27 @@ func BuildDeterministicPrivateKey(groupID, chainID uint64, index *big.Int, l2typ
 		return "", errors.New("private key cannot be zero")
 	}
 	return pkHex, nil
+}
+
+func AddressFromPrivateKey(pkHex string, l2type int) (string, error) {
+	if l2type != 0 && l2type != 1 && l2type != 2 {
+		return "", fmt.Errorf("invalid l2type: %d", l2type)
+	}
+	trimmed := strings.TrimSpace(pkHex)
+	trimmed = strings.TrimPrefix(trimmed, "0x")
+	trimmed = strings.TrimPrefix(trimmed, "0X")
+	priv, err := crypto.HexToECDSA(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid private key: %w", err)
+	}
+	addr := crypto.PubkeyToAddress(priv.PublicKey).Hex()
+	if l2type != 2 {
+		return strings.ToLower(addr), nil
+	}
+	if len(addr) < 3 {
+		return "", fmt.Errorf("invalid ethereum address: %s", addr)
+	}
+	return strings.ToLower("0x1" + addr[3:]), nil
 }
 
 func leftPadHex(value string, width int) string {

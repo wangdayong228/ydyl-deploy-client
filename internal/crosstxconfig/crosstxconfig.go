@@ -533,6 +533,11 @@ func replaceLocalhostWithIP(rawURL, ip string) string {
 	return parsedURL.String()
 }
 
+// ReplaceLocalhostWithIP 将 RPC URL 中的 localhost / 127.0.0.1 / 私有 IP 替换为 ip。
+func ReplaceLocalhostWithIP(rawURL, ip string) string {
+	return replaceLocalhostWithIP(rawURL, ip)
+}
+
 func shouldReplaceHost(host string) bool {
 	trimmedHost := strings.TrimSpace(host)
 	if trimmedHost == "" {
