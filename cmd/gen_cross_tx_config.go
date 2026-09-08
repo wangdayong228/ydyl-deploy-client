@@ -20,6 +20,8 @@ var (
 	genCrossTxTxAmountPerWallet int
 	genCrossTxBlockRange        int64
 	genCrossTxWalletAmount      int
+	genCrossTxWaitForReceipts   bool
+	genCrossTxMaxUnconfirmed    int
 )
 
 const generatedJobsConfigFilename = "7s_jobs.gen.json"
@@ -41,6 +43,8 @@ func init() {
 	cmd.Flags().IntVar(&genCrossTxTxAmountPerWallet, "tx-amount-per-wallet", 10, "tx_amount_per_wallet：每个 wallet 发送交易数量")
 	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 10, "wallet_amount：每个 job 发送的 wallet 数量")
 	cmd.Flags().Int64Var(&genCrossTxBlockRange, "block-range", 300, "block_range：查询区块范围")
+	cmd.Flags().BoolVar(&genCrossTxWaitForReceipts, "wait-for-receipts", true, "wait_for_receipts：是否启用未打包上限与 receipt 轮询（默认 true，含 xjst）")
+	cmd.Flags().IntVar(&genCrossTxMaxUnconfirmed, "max-unconfirmed", 1000, "max_unconfirmed：未打包交易上限 N（默认 1000）")
 
 	rootCmd.AddCommand(cmd)
 }
@@ -62,6 +66,8 @@ func runGenCrossTxConfig(cmd *cobra.Command, args []string) error {
 		TxAmountPerWallet: genCrossTxTxAmountPerWallet,
 		WalletAmount:      genCrossTxWalletAmount,
 		BlockRange:        genCrossTxBlockRange,
+		WaitForReceipts:   genCrossTxWaitForReceipts,
+		MaxUnconfirmed:    genCrossTxMaxUnconfirmed,
 	})
 	if err != nil {
 		return err

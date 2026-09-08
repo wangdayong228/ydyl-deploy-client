@@ -224,7 +224,7 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 
 	l1BridgeReceiver := "0x00000000000000000000000000000000000000ff"
 	l1RPC := "https://example.org/rpc"
-	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, l1BridgeReceiver, l1RPC)
+	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, l1BridgeReceiver, l1RPC, true, 1000)
 	require.NoError(t, err)
 
 	require.Len(t, jobs, 3)
@@ -264,11 +264,8 @@ func TestGenerateJobs_ThreeChains_Success(t *testing.T) {
 		require.Equal(t, source.Contracts.L2BridgeSendContract.Hex(), j.SourceL2Bridge)
 		require.Equal(t, target.Summary.L2_COUNTER_CONTRACT.Hex(), j.TargetL2Contract)
 		require.Equal(t, l1BridgeReceiver, j.L1BridgeReceiver)
-		if j.SourceL2ChainType == "xjst" {
-			require.False(t, j.WaitForReceipts)
-		} else {
-			require.True(t, j.WaitForReceipts)
-		}
+		require.True(t, j.WaitForReceipts)
+		require.Equal(t, 1000, j.MaxUnconfirmed)
 		require.Equal(t, replaceLocalhostWithIP(source.Summary.L2_RPC_URL, source.IP), j.SourceL2RPC)
 		require.Equal(t, replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP), j.TargetL2RPC)
 		require.Equal(t, target.Contracts.L2BridgeReceiveContract.Hex(), j.TargetL2Bridge)
@@ -334,7 +331,7 @@ func TestGenerateJobs_TypedPools_Repeated(t *testing.T) {
 	}
 
 	for i := 0; i < 20; i++ {
-		jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+		jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", true, 1000)
 		require.NoError(t, err)
 		require.Len(t, jobs, 3)
 		assertTypedTargetPools(t, jobs)
@@ -352,7 +349,7 @@ func TestGenerateJobs_SameTypeInstances_UniqueByRPC(t *testing.T) {
 		"ydyl-cdk-1": newTestChainInfo("cdk", "2.2.2.1", "2"),
 	}
 
-	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", true, 1000)
 	require.NoError(t, err)
 	require.Len(t, jobs, 3)
 	assertTypedTargetPools(t, jobs)
@@ -433,13 +430,14 @@ func TestGenerateJobs_SingleXjst_SelfTarget(t *testing.T) {
 	infos := map[string]*ChainInfo{
 		"ydyl-xjst-1-1": newTestChainInfo("xjst", "3.3.3.3", "3"),
 	}
-	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", true, 1000)
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
 	require.Equal(t, "xjst", jobs[0].SourceL2ChainType)
 	require.Equal(t, "xjst", jobs[0].TargetL2ChainType)
 	require.Equal(t, jobs[0].SourceL2RPC, jobs[0].TargetL2RPC)
-	require.False(t, jobs[0].WaitForReceipts)
+	require.True(t, jobs[0].WaitForReceipts)
+	require.Equal(t, 1000, jobs[0].MaxUnconfirmed)
 }
 
 func TestGenerateJobs_SingleOp_SelfTarget(t *testing.T) {
@@ -447,13 +445,14 @@ func TestGenerateJobs_SingleOp_SelfTarget(t *testing.T) {
 	infos := map[string]*ChainInfo{
 		"ydyl-op-1": newTestChainInfo("op", "1.1.1.1", "1"),
 	}
-	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", true, 1000)
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
 	require.Equal(t, "op", jobs[0].SourceL2ChainType)
 	require.Equal(t, "op", jobs[0].TargetL2ChainType)
 	require.Equal(t, jobs[0].SourceL2RPC, jobs[0].TargetL2RPC)
 	require.True(t, jobs[0].WaitForReceipts)
+	require.Equal(t, 1000, jobs[0].MaxUnconfirmed)
 }
 
 func TestGenerateJobs_TwoXjstAndRollup_TypedPools(t *testing.T) {
@@ -465,7 +464,7 @@ func TestGenerateJobs_TwoXjstAndRollup_TypedPools(t *testing.T) {
 		"ydyl-cdk-1":    newTestChainInfo("cdk", "2.2.2.1", "2"),
 	}
 
-	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", true, 1000)
 	require.NoError(t, err)
 	require.Len(t, jobs, 4)
 	assertTypedTargetPools(t, jobs)
@@ -524,7 +523,7 @@ func TestGenerateJobs_WaitForReceipts_BySourceChainType(t *testing.T) {
 		},
 	}
 
-	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc")
+	jobs, err := GenerateJobs(chainTypes, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", true, 1000)
 	require.NoError(t, err)
 	require.Len(t, jobs, 2)
 
@@ -533,10 +532,32 @@ func TestGenerateJobs_WaitForReceipts_BySourceChainType(t *testing.T) {
 		got[j.SourceL2ChainType] = j.WaitForReceipts
 	}
 	require.Equal(t, true, got["op"])
-	require.Equal(t, false, got["xjst"])
+	require.Equal(t, true, got["xjst"])
 	assertTypedTargetPools(t, jobs)
 	require.Equal(t, jobBySourceType(t, jobs, "op").SourceL2RPC, jobBySourceType(t, jobs, "op").TargetL2RPC)
 	require.Equal(t, jobBySourceType(t, jobs, "xjst").SourceL2RPC, jobBySourceType(t, jobs, "xjst").TargetL2RPC)
+}
+
+func TestGenerateJobs_MaxUnconfirmed_FromArgs(t *testing.T) {
+	chainKeys := []string{"ydyl-xjst-1-1"}
+	infos := map[string]*ChainInfo{
+		"ydyl-xjst-1-1": newTestChainInfo("xjst", "3.3.3.3", "3"),
+	}
+	jobs, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", false, 500)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	require.False(t, jobs[0].WaitForReceipts)
+	require.Equal(t, 500, jobs[0].MaxUnconfirmed)
+}
+
+func TestGenerateJobs_MaxUnconfirmed_RejectsNonPositive(t *testing.T) {
+	chainKeys := []string{"ydyl-xjst-1-1"}
+	infos := map[string]*ChainInfo{
+		"ydyl-xjst-1-1": newTestChainInfo("xjst", "3.3.3.3", "3"),
+	}
+	_, err := GenerateJobs(chainKeys, infos, 1000, 10, 100000, "0x00000000000000000000000000000000000000ff", "https://example.org/rpc", true, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "maxUnconfirmed")
 }
 
 func TestReplaceLocalhostWithIP_RewriteRules(t *testing.T) {
@@ -672,6 +693,8 @@ func TestGenerateWithFetcher_ConcurrentAndRetrySuccess(t *testing.T) {
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
+		WaitForReceipts:   true,
+		MaxUnconfirmed:    1000,
 	}, fetcher)
 	require.NoError(t, err)
 	require.NotNil(t, res)
@@ -722,6 +745,8 @@ func TestGenerateWithFetcher_RetryExhaustedFail(t *testing.T) {
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
+		WaitForReceipts:   true,
+		MaxUnconfirmed:    1000,
 	}, fetcher)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "attempts=3")
@@ -749,6 +774,8 @@ func TestGenerateWithFetcher_SingleChainSuccess(t *testing.T) {
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
+		WaitForReceipts:   true,
+		MaxUnconfirmed:    1000,
 	}, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.JobsCount)
@@ -782,6 +809,8 @@ func TestGenerateWithFetcher_DefaultOutDirFromServersDir(t *testing.T) {
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
+		WaitForReceipts:   true,
+		MaxUnconfirmed:    1000,
 	}, fetcher)
 	require.NoError(t, err)
 
@@ -838,6 +867,8 @@ func TestGenerateWithFetcher_PartNumber8(t *testing.T) {
 		TxAmountPerWallet: 1000,
 		WalletAmount:      10,
 		BlockRange:        100000,
+		WaitForReceipts:   true,
+		MaxUnconfirmed:    1000,
 	}, fetcher)
 	require.NoError(t, err)
 

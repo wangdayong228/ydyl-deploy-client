@@ -20,6 +20,27 @@ func TestGenCrossTxConfigWalletAmountDefault(t *testing.T) {
 	}
 }
 
+func TestGenCrossTxConfigReceiptWaitDefaults(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"gen-cross-tx-config"})
+	if err != nil {
+		t.Fatalf("find gen-cross-tx-config: %v", err)
+	}
+	wait, err := cmd.Flags().GetBool("wait-for-receipts")
+	if err != nil {
+		t.Fatalf("get wait-for-receipts: %v", err)
+	}
+	if !wait {
+		t.Fatalf("wait-for-receipts default = %v, want true", wait)
+	}
+	every, err := cmd.Flags().GetInt("max-unconfirmed")
+	if err != nil {
+		t.Fatalf("get max-unconfirmed: %v", err)
+	}
+	if every != 1000 {
+		t.Fatalf("max-unconfirmed default = %d, want 1000", every)
+	}
+}
+
 func TestCopyGeneratedJobsConfig_CopiesAllJSONToCurrentWorkingDir(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourcePath := filepath.Join(sourceDir, "all.json")

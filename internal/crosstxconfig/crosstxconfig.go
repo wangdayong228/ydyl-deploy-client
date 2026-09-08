@@ -39,6 +39,7 @@ type Job struct {
 	TargetL2Bridge  string `json:"target_l2_bridge"`
 	BlockRange      int64  `json:"block_range"`
 	WaitForReceipts bool   `json:"wait_for_receipts"`
+	MaxUnconfirmed  int    `json:"max_unconfirmed"`
 	SourceL1Bridge  string `json:"source_l1_bridge"`
 	L1RPC           string `json:"l1_rpc"`
 }
@@ -87,6 +88,8 @@ type GenerateParams struct {
 	TxAmountPerWallet int
 	WalletAmount      int
 	BlockRange        int64
+	WaitForReceipts   bool
+	MaxUnconfirmed    int
 }
 
 type GenerateResult struct {
@@ -119,6 +122,9 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	}
 	if p.PartNumber <= 0 {
 		return nil, fmt.Errorf("partNumber 必须 > 0")
+	}
+	if p.MaxUnconfirmed <= 0 {
+		return nil, fmt.Errorf("maxUnconfirmed 必须 > 0")
 	}
 
 	deployCfg := deploy.LoadConfigFromFile(p.ConfigPath)
@@ -155,7 +161,7 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 		return nil, err
 	}
 
-	jobs, err := GenerateJobs(chainKeys, infos, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver, l1RPC)
+	jobs, err := GenerateJobs(chainKeys, infos, p.TxAmountPerWallet, p.WalletAmount, p.BlockRange, l1BridgeReceiver, l1RPC, p.WaitForReceipts, p.MaxUnconfirmed)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +396,10 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 // （xjst 只打 xjst；op/cdk 只打 op/cdk；池大小为 1 时自指，n>=2 时池内 derangement）。
 // 助记词在内部随机生成一次（12 words），所有 jobs 复用同一个。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
-func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string, l1RPC string) ([]Job, error) {
+func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string, l1RPC string, waitForReceipts bool, maxUnconfirmed int) ([]Job, error) {
+	if maxUnconfirmed <= 0 {
+		return nil, fmt.Errorf("maxUnconfirmed 必须 > 0")
+	}
 
 	mnemonic, err := GenerateMnemonic12()
 	if err != nil {
@@ -427,7 +436,8 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 			TargetL2RPC:     replaceLocalhostWithIP(target.Summary.L2_RPC_URL, target.IP),
 			TargetL2Bridge:  target.Contracts.L2BridgeReceiveContract.Hex(),
 			BlockRange:      blockRange,
-			WaitForReceipts: source.Type != "xjst",
+			WaitForReceipts: waitForReceipts,
+			MaxUnconfirmed:  maxUnconfirmed,
 			SourceL1Bridge:  source.Contracts.L1BridgeReceiveContract.Hex(),
 			L1RPC:           l1RPC,
 		}
