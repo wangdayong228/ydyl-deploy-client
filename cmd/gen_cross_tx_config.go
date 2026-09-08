@@ -28,7 +28,7 @@ func init() {
 	cmd := &cobra.Command{
 		Use:   "gen-cross-tx-config",
 		Short: "生成跨链脚本 jobs 配置文件",
-		Long:  "读取 servers.json，调用各链节点上的 ydyl-console-service API 获取 rpc/合约信息，生成跨链脚本(zk-claim-service/scripts/7s_jobs.json)所需的 jobs 配置（源链遍历所有链，目标链全局唯一且不为自身，op/cdk/xjst 可互跨）。",
+		Long:  "读取 servers.json，调用各链节点上的 ydyl-console-service API 获取 rpc/合约信息，生成跨链脚本(zk-claim-service/scripts/7s_jobs.json)所需的 jobs 配置（源链遍历所有链；xjst 只打 xjst，op/cdk 只打 op/cdk；单实例可自指，多实例时目标在池内唯一且不为自身）。",
 		RunE:  runGenCrossTxConfig,
 	}
 
@@ -39,7 +39,7 @@ func init() {
 	cmd.Flags().StringVar(&genCrossTxOutPath, "out", "", "输出根目录（将生成到 <out>/jobs/all.json 与 <out>/jobs/1..N.json；不传则默认使用 servers 所在目录）")
 	cmd.Flags().IntVar(&genCrossTxPartNumber, "part-number", 8, "jobs 拆分份数（将生成 jobs/1.json ~ jobs/N.json）")
 	cmd.Flags().IntVar(&genCrossTxTxAmountPerWallet, "tx-amount-per-wallet", 10, "tx_amount_per_wallet：每个 wallet 发送交易数量")
-	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 100, "wallet_amount：每个 job 发送的 wallet 数量")
+	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 10, "wallet_amount：每个 job 发送的 wallet 数量")
 	cmd.Flags().Int64Var(&genCrossTxBlockRange, "block-range", 300, "block_range：查询区块范围")
 
 	rootCmd.AddCommand(cmd)

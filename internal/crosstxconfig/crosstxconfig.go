@@ -140,8 +140,8 @@ func GenerateWithFetcher(ctx context.Context, p GenerateParams, fetcher Fetcher)
 	if err != nil {
 		return nil, err
 	}
-	if len(chainEntries) < 2 {
-		return nil, fmt.Errorf("可用链数量不足（需要至少 2 条链），当前=%d", len(chainEntries))
+	if len(chainEntries) == 0 {
+		return nil, fmt.Errorf("可用链数量不足（需要至少 1 条链），当前=%d", len(chainEntries))
 	}
 
 	chainKeys := make([]string, 0, len(chainEntries))
@@ -386,8 +386,8 @@ func parseServerNameIndex(name, serviceType string) (int, error) {
 	}
 }
 
-// GenerateJobs 生成 jobs：源链遍历所有链，目标链为全体链实例的 derangement
-// （源 ≠ 目标，每个链实例作为 target 恰好一次；op/cdk/xjst 可互跨）。
+// GenerateJobs 生成 jobs：源链遍历所有链，目标按类型分池分配
+// （xjst 只打 xjst；op/cdk 只打 op/cdk；池大小为 1 时自指，n>=2 时池内 derangement）。
 // 助记词在内部随机生成一次（12 words），所有 jobs 复用同一个。
 // 注意：该函数仅做组合与字段映射；不做网络/文件 IO，便于测试。
 func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWallet int, walletAmount int, blockRange int64, l1BridgeReceiver string, l1RPC string) ([]Job, error) {
@@ -397,7 +397,7 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 		return nil, err
 	}
 
-	assignment, err := assignUniqueTargets(chainKeys)
+	assignment, err := assignTargetsByType(chainKeys, infos)
 	if err != nil {
 		return nil, err
 	}
@@ -442,9 +442,43 @@ func GenerateJobs(chainKeys []string, infos map[string]*ChainInfo, txAmountPerWa
 	return jobs, nil
 }
 
+func assignTargetsByType(chainKeys []string, infos map[string]*ChainInfo) (map[string]string, error) {
+	var xjst []string
+	var rollup []string
+	for _, key := range chainKeys {
+		info, ok := infos[key]
+		if !ok || info == nil {
+			return nil, fmt.Errorf("链信息缺失: source=%s", key)
+		}
+		switch info.Type {
+		case "xjst":
+			xjst = append(xjst, key)
+		case "op", "cdk":
+			rollup = append(rollup, key)
+		default:
+			return nil, fmt.Errorf("不支持的链类型: %s", info.Type)
+		}
+	}
+
+	assignment := make(map[string]string, len(chainKeys))
+	for _, pool := range [][]string{xjst, rollup} {
+		part, err := assignUniqueTargets(pool)
+		if err != nil {
+			return nil, err
+		}
+		for src, dst := range part {
+			assignment[src] = dst
+		}
+	}
+	return assignment, nil
+}
+
 func assignUniqueTargets(chainKeys []string) (map[string]string, error) {
-	if len(chainKeys) < 2 {
-		return nil, fmt.Errorf("可用链数量不足（需要至少 2 条链），当前=%d", len(chainKeys))
+	if len(chainKeys) == 0 {
+		return map[string]string{}, nil
+	}
+	if len(chainKeys) == 1 {
+		return map[string]string{chainKeys[0]: chainKeys[0]}, nil
 	}
 
 	shuffled := append([]string(nil), chainKeys...)

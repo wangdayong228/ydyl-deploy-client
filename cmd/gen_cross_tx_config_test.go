@@ -6,6 +6,20 @@ import (
 	"testing"
 )
 
+func TestGenCrossTxConfigWalletAmountDefault(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"gen-cross-tx-config"})
+	if err != nil {
+		t.Fatalf("find gen-cross-tx-config: %v", err)
+	}
+	got, err := cmd.Flags().GetInt("wallet-amount")
+	if err != nil {
+		t.Fatalf("get wallet-amount: %v", err)
+	}
+	if got != 10 {
+		t.Fatalf("wallet-amount default = %d, want 10", got)
+	}
+}
+
 func TestCopyGeneratedJobsConfig_CopiesAllJSONToCurrentWorkingDir(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourcePath := filepath.Join(sourceDir, "all.json")
