@@ -15,8 +15,15 @@ func TestGenCrossTxConfigWalletAmountDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get wallet-amount: %v", err)
 	}
-	if got != 10 {
-		t.Fatalf("wallet-amount default = %d, want 10", got)
+	if got != 100 {
+		t.Fatalf("wallet-amount default = %d, want 100", got)
+	}
+	txAmount, err := cmd.Flags().GetInt("tx-amount-per-wallet")
+	if err != nil {
+		t.Fatalf("get tx-amount-per-wallet: %v", err)
+	}
+	if txAmount != 10000 {
+		t.Fatalf("tx-amount-per-wallet default = %d, want 10000", txAmount)
 	}
 }
 

@@ -40,8 +40,8 @@ func init() {
 
 	cmd.Flags().StringVar(&genCrossTxOutPath, "out", "", "输出根目录（将生成到 <out>/jobs/all.json 与 <out>/jobs/1..N.json；不传则默认使用 servers 所在目录）")
 	cmd.Flags().IntVar(&genCrossTxPartNumber, "part-number", 8, "jobs 拆分份数（将生成 jobs/1.json ~ jobs/N.json）")
-	cmd.Flags().IntVar(&genCrossTxTxAmountPerWallet, "tx-amount-per-wallet", 10, "tx_amount_per_wallet：每个 wallet 发送交易数量")
-	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 10, "wallet_amount：每个 job 发送的 wallet 数量")
+	cmd.Flags().IntVar(&genCrossTxTxAmountPerWallet, "tx-amount-per-wallet", 10000, "tx_amount_per_wallet：每个 wallet 发送交易数量")
+	cmd.Flags().IntVar(&genCrossTxWalletAmount, "wallet-amount", 100, "wallet_amount：每个 job 发送的 wallet 数量")
 	cmd.Flags().Int64Var(&genCrossTxBlockRange, "block-range", 300, "block_range：查询区块范围")
 	cmd.Flags().BoolVar(&genCrossTxWaitForReceipts, "wait-for-receipts", true, "wait_for_receipts：是否启用未打包上限与 receipt 轮询（默认 true，含 xjst）")
 	cmd.Flags().IntVar(&genCrossTxMaxUnconfirmed, "max-unconfirmed", 1000, "max_unconfirmed：未打包交易上限 N（默认 1000）")

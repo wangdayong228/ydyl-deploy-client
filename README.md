@@ -111,9 +111,9 @@ go run . gen-cross-tx-config \
 - `--part-number`
   - jobs 拆分份数，默认 `8`
 - `--tx-amount-per-wallet`
-  - 每个 wallet 发送交易数量，默认 `1000`
+  - 每个 wallet 发送交易数量，默认 `10000`
 - `--wallet-amount`
-  - 每个 job 使用的 wallet 数量，默认 `10`
+  - 每个 job 使用的 wallet 数量，默认 `100`
 - `--block-range`
   - TPS 查询区块范围，默认 `100000`
 
