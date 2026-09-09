@@ -65,6 +65,18 @@ func TestBuildDeterministicPrivateKey_UsesGroupIDForXJST(t *testing.T) {
 	}
 }
 
+func TestBuildDeterministicPrivateKey_UsesChainIDForCore(t *testing.T) {
+	got, err := BuildDeterministicPrivateKey(999, 324, big.NewInt(42), 3)
+	if err != nil {
+		t.Fatalf("BuildDeterministicPrivateKey error: %v", err)
+	}
+
+	want := "0x000000000000000000000000000000000000000001440000000000000000002a"
+	if got != want {
+		t.Fatalf("deterministic key mismatch, got=%s want=%s", got, want)
+	}
+}
+
 func TestBuildDeterministicPrivateKey_Format(t *testing.T) {
 	got, err := BuildDeterministicPrivateKey(0, 1, big.NewInt(1), 1)
 	if err != nil {
@@ -131,5 +143,63 @@ func TestAddressFromPrivateKey_RejectsInvalidL2Type(t *testing.T) {
 	}
 	if _, err := AddressFromPrivateKey(pk, 3); err == nil {
 		t.Fatal("expected invalid l2type error")
+	}
+}
+
+func TestCoreBase32AddressFromPrivateKey_SDKExample(t *testing.T) {
+	pk := "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	got, err := CoreBase32AddressFromPrivateKey(pk, 1)
+	if err != nil {
+		t.Fatalf("addr: %v", err)
+	}
+	want := "cfxtest:aasm4c231py7j34fghntcfkdt2nm9xv1tu6jd3r1s7"
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+}
+
+func TestCoreBase32AddressFromPrivateKey_Chain7654Index200000(t *testing.T) {
+	pk, err := BuildDeterministicPrivateKey(0, 7654, big.NewInt(200000), 3)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	got, err := CoreBase32AddressFromPrivateKey(pk, 7654)
+	if err != nil {
+		t.Fatalf("addr: %v", err)
+	}
+	want := "net7654:aamwc2x2hjvcwsvnadhv2xxkrfkfhjspvjdkcyw1u8"
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+}
+
+func TestCoreBase32AddressFromPrivateKey_NetworkPrefixes(t *testing.T) {
+	pk, err := BuildDeterministicPrivateKey(0, 7654, big.NewInt(200000), 3)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+
+	cases := []struct {
+		networkID uint64
+		want      string
+	}{
+		{1, "cfxtest:aamwc2x2hjvcwsvnadhv2xxkrfkfhjspvjbx5wwbn9"},
+		{1029, "cfx:aamwc2x2hjvcwsvnadhv2xxkrfkfhjspvjn2jcyntz"},
+	}
+	for _, tc := range cases {
+		got, err := CoreBase32AddressFromPrivateKey(pk, tc.networkID)
+		if err != nil {
+			t.Fatalf("networkID=%d: %v", tc.networkID, err)
+		}
+		if got != tc.want {
+			t.Fatalf("networkID=%d got %s want %s", tc.networkID, got, tc.want)
+		}
+	}
+}
+
+func TestCoreBase32AddressFromPrivateKey_RejectsZeroNetworkID(t *testing.T) {
+	pk := "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if _, err := CoreBase32AddressFromPrivateKey(pk, 0); err == nil {
+		t.Fatal("expected zero networkID error")
 	}
 }

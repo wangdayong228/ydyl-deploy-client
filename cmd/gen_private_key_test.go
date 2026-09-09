@@ -89,3 +89,62 @@ func TestGenPrivateKeyCommand_RequiresValidL2Type(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestGenPrivateKeyCommand_MeetingNotesEVM(t *testing.T) {
+	cmd := newGenPrivateKeyCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--chainID", "10000", "--index", "200000"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute gen-private-key: %v", err)
+	}
+
+	got := strings.TrimSpace(out.String())
+	want := "privateKey=0x0000000000000000000000000000000000000000271000000000000000030d40\naddress=0xfc737023702a09c01260252d853033ccaa587b5d"
+	if got != want {
+		t.Fatalf("generated key mismatch, got=%s want=%s", got, want)
+	}
+}
+
+func TestGenPrivateKeyCommand_GeneratesCoreCIP37(t *testing.T) {
+	cmd := newGenPrivateKeyCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--chainID", "7654", "--index", "200000", "--l2type", "3"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute gen-private-key: %v", err)
+	}
+
+	got := strings.TrimSpace(out.String())
+	want := "privateKey=0x00000000000000000000000000000000000000001de600000000000000030d40\naddress=net7654:aamwc2x2hjvcwsvnadhv2xxkrfkfhjspvjdkcyw1u8"
+	if got != want {
+		t.Fatalf("generated key mismatch, got=%s want=%s", got, want)
+	}
+}
+
+func TestGenPrivateKeyCommand_RequiresChainIDForCore(t *testing.T) {
+	cmd := newGenPrivateKeyCommand()
+	cmd.SetArgs([]string{"--index", "200000", "--l2type", "3"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected missing chainID error")
+	}
+	if !strings.Contains(err.Error(), "--chainID") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGenPrivateKeyCommand_RejectsZeroChainIDForCore(t *testing.T) {
+	cmd := newGenPrivateKeyCommand()
+	cmd.SetArgs([]string{"--chainID", "0", "--index", "200000", "--l2type", "3"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected zero chainID error")
+	}
+}

@@ -18,7 +18,7 @@ func EcdsaPrivToWeb3Hex(priv *ecdsa.PrivateKey) string {
 var maxDeterministicIndex = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 80), big.NewInt(1))
 
 func BuildDeterministicPrivateKey(groupID, chainID uint64, index *big.Int, l2type int) (string, error) {
-	if l2type != 0 && l2type != 1 && l2type != 2 {
+	if l2type != 0 && l2type != 1 && l2type != 2 && l2type != 3 {
 		return "", fmt.Errorf("invalid l2type: %d", l2type)
 	}
 	if index == nil {
@@ -66,6 +66,25 @@ func AddressFromPrivateKey(pkHex string, l2type int) (string, error) {
 		return "", fmt.Errorf("invalid ethereum address: %s", addr)
 	}
 	return strings.ToLower("0x1" + addr[3:]), nil
+}
+
+func CoreBase32AddressFromPrivateKey(pkHex string, networkID uint64) (string, error) {
+	if networkID == 0 {
+		return "", fmt.Errorf("invalid networkId: %d", networkID)
+	}
+	trimmed := strings.TrimSpace(pkHex)
+	trimmed = strings.TrimPrefix(trimmed, "0x")
+	trimmed = strings.TrimPrefix(trimmed, "0X")
+	priv, err := crypto.HexToECDSA(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid private key: %w", err)
+	}
+	addr := crypto.PubkeyToAddress(priv.PublicKey).Hex()
+	if len(addr) < 3 {
+		return "", fmt.Errorf("invalid ethereum address: %s", addr)
+	}
+	typed := strings.ToLower("0x1" + addr[3:])
+	return encodeCIP37(typed, networkID)
 }
 
 func leftPadHex(value string, width int) string {

@@ -165,7 +165,7 @@ go run . tps --config ./7s_jobs.gen.json
 - `tps`
   - 校验 jobs JSON 后执行 `docker compose up --build tps`
 - `gen-private-key`
-  - 按 `ydyl-gen-accounts` 的 deterministic 规则生成私钥；`l2type=0/1` 使用 `chainID`，`l2type=2` 使用 `groupID`
+  - 按 `ydyl-gen-accounts` 的 deterministic 规则生成私钥；`l2type=0/1/3` 使用 `chainID`，`l2type=2` 使用 `groupID`；`l2type=3` 输出 CIP-37 base32 地址
 - `sample-wallets`
   - 按 `--l2type` 从 `servers.json` 入口链中随机挑 1 条，抽取 10 个确定性账户并查询 L2 余额
 
@@ -177,6 +177,9 @@ go run . gen-private-key --chainID 324 --index 42 --l2type 0
 
 # XJST：使用 groupID
 go run . gen-private-key --groupID 77 --index 42 --l2type 2
+
+# Conflux Core Space：使用 Core chain_id（不要用 evm_chain_id），输出 CIP-37
+go run . gen-private-key --chainID 7654 --index 200000 --l2type 3
 
 # 抽查 OP 链 10 个确定性账户的地址和余额
 go run . sample-wallets --l2type 1
