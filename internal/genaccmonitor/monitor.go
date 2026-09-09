@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wangdayong228/ydyl-deploy-client/internal/crosstxconfig"
 	"github.com/wangdayong228/ydyl-deploy-client/internal/deploy"
 	ydylconsolesdk "github.com/wangdayong228/ydyl-deploy-client/pkg/ydyl-console-service-sdk"
 )
@@ -29,10 +31,29 @@ type SummaryFileItem struct {
 	Error       string                                `json:"error,omitempty"`
 }
 
+type ChainTypeStats struct {
+	Count            int `json:"count"`
+	AccountGenerated int `json:"accountGenerated"`
+}
+
+type ByServiceType struct {
+	Op   ChainTypeStats `json:"op"`
+	Cdk  ChainTypeStats `json:"cdk"`
+	Xjst ChainTypeStats `json:"xjst"`
+}
+
 type SummaryFile struct {
-	UpdatedAt string                               `json:"updatedAt"`
-	Items     []SummaryFileItem                    `json:"items"`
-	Summary   ydylconsolesdk.GenAccSummaryResponse `json:"summary"`
+	UpdatedAt     string                               `json:"updatedAt"`
+	Items         []SummaryFileItem                    `json:"items"`
+	Summary       ydylconsolesdk.GenAccSummaryResponse `json:"summary"`
+	ByServiceType ByServiceType                        `json:"byServiceType"`
+}
+
+type aggregateResult struct {
+	Merged         ydylconsolesdk.GenAccSummaryResponse
+	ByServiceType  ByServiceType
+	SuccessServers int
+	ErrorServers   int
 }
 
 func Run(ctx context.Context, p Params) error {
@@ -50,7 +71,10 @@ func Run(ctx context.Context, p Params) error {
 	if err != nil {
 		return err
 	}
-	targets := pickMonitorTargets(servers)
+	targets, err := pickMonitorTargets(servers)
+	if err != nil {
+		return err
+	}
 	if len(targets) == 0 {
 		return fmt.Errorf("servers 中没有可监控的链节点（serviceType 仅支持 op/cdk/xjst）")
 	}
@@ -103,40 +127,79 @@ func runOneRound(ctx context.Context, targets []deploy.ServerInfo, outPath strin
 	}
 	wg.Wait()
 
-	var merged ydylconsolesdk.GenAccSummaryResponse
-	successServers := 0
-	errorServers := 0
-	for _, item := range items {
-		if item.Summary == nil {
-			if item.Error != "" {
-				errorServers++
-			}
-			continue
-		}
-		successServers++
-		merged.TotalTxSentCount += item.Summary.TotalTxSentCount
-		merged.AccountGenerated += item.Summary.AccountGenerated
-		merged.AccountRemains += item.Summary.AccountRemains
-		merged.Processing += item.Summary.Processing
-		merged.Success += item.Summary.Success
-		merged.Fail += item.Summary.Fail
-	}
-
+	agg := aggregate(items)
 	out := SummaryFile{
-		UpdatedAt: now,
-		Items:     items,
-		Summary:   merged,
+		UpdatedAt:     now,
+		Items:         items,
+		Summary:       agg.Merged,
+		ByServiceType: agg.ByServiceType,
 	}
 	if err := writeJSONFileAtomic(outPath, out); err != nil {
 		return err
 	}
 
-	fmt.Printf("[%s] totalAccountGenerated=%d successServers=%d errorServers=%d\n", now, merged.AccountGenerated, successServers, errorServers)
+	fmt.Println(formatRoundLine(now, agg))
 	return nil
 }
 
-func pickMonitorTargets(servers []deploy.ServerInfo) []deploy.ServerInfo {
-	out := make([]deploy.ServerInfo, 0, len(servers))
+func aggregate(items []SummaryFileItem) aggregateResult {
+	var got aggregateResult
+	for _, item := range items {
+		stats := chainTypeStatsPtr(&got.ByServiceType, item.ServiceType)
+		if stats != nil {
+			stats.Count++
+		}
+		if item.Summary == nil {
+			if item.Error != "" {
+				got.ErrorServers++
+			}
+			continue
+		}
+		got.SuccessServers++
+		got.Merged.TotalTxSentCount += item.Summary.TotalTxSentCount
+		got.Merged.AccountGenerated += item.Summary.AccountGenerated
+		got.Merged.AccountRemains += item.Summary.AccountRemains
+		got.Merged.Processing += item.Summary.Processing
+		got.Merged.Success += item.Summary.Success
+		got.Merged.Fail += item.Summary.Fail
+		if stats != nil {
+			stats.AccountGenerated += item.Summary.AccountGenerated
+		}
+	}
+	return got
+}
+
+func chainTypeStatsPtr(by *ByServiceType, serviceType string) *ChainTypeStats {
+	switch strings.ToLower(strings.TrimSpace(serviceType)) {
+	case "op":
+		return &by.Op
+	case "cdk":
+		return &by.Cdk
+	case "xjst":
+		return &by.Xjst
+	default:
+		return nil
+	}
+}
+
+func formatRoundLine(now string, agg aggregateResult) string {
+	return fmt.Sprintf(
+		"[%s] totalAccountGenerated=%d successServers=%d errorServers=%d op=%d/%d cdk=%d/%d xjst=%d/%d",
+		now,
+		agg.Merged.AccountGenerated,
+		agg.SuccessServers,
+		agg.ErrorServers,
+		agg.ByServiceType.Op.Count,
+		agg.ByServiceType.Op.AccountGenerated,
+		agg.ByServiceType.Cdk.Count,
+		agg.ByServiceType.Cdk.AccountGenerated,
+		agg.ByServiceType.Xjst.Count,
+		agg.ByServiceType.Xjst.AccountGenerated,
+	)
+}
+
+func pickMonitorTargets(servers []deploy.ServerInfo) ([]deploy.ServerInfo, error) {
+	filtered := make([]deploy.ServerInfo, 0, len(servers))
 	for _, s := range servers {
 		t := strings.ToLower(strings.TrimSpace(s.ServiceType))
 		if t != "op" && t != "cdk" && t != "xjst" {
@@ -146,13 +209,28 @@ func pickMonitorTargets(servers []deploy.ServerInfo) []deploy.ServerInfo {
 		if ip == "" {
 			continue
 		}
-		out = append(out, deploy.ServerInfo{
+		filtered = append(filtered, deploy.ServerInfo{
 			IP:          ip,
 			ServiceType: t,
 			Name:        strings.TrimSpace(s.Name),
 		})
 	}
-	return out
+
+	entries, err := crosstxconfig.PickChainEntries(filtered)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]deploy.ServerInfo, 0, len(names))
+	for _, name := range names {
+		out = append(out, entries[name])
+	}
+	return out, nil
 }
 
 func loadServers(path string) ([]deploy.ServerInfo, error) {

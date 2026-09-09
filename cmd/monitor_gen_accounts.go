@@ -21,7 +21,7 @@ func init() {
 	cmd := &cobra.Command{
 		Use:   "monitor-gen-accounts",
 		Short: "监控各链生成账户汇总信息",
-		Long:  "读取 servers.json，轮询各链 ydyl-console-service 的 /v1/result/gen-acc/summary，输出分链与总汇总到 JSON 文件，并实时打印 totalAccountGenerated。",
+		Long:  "读取 servers.json，轮询各链 ydyl-console-service 的 /v1/result/gen-acc/summary，输出分链与总汇总到 JSON 文件（含 byServiceType 条数/账户数），并实时打印 totalAccountGenerated。XJST 只监控组内 node-1。",
 		RunE:  runMonitorGenAccounts,
 	}
 
