@@ -133,6 +133,8 @@ go run . tps --config ./7s_jobs.gen.json
 
 这两个命令会进入 `../ydyl-bench-docker` 启动 Docker Compose service；如果传入 `--config`，会先校验该文件与 `ydyl-deploy-client/output/jobs/all.json` 的 JSON 内容一致。不传 `--config` 时跳过该校验。
 
+`tps` 监控每约 10s 覆盖写 `output/jobs/TOTALTPS.json`（ISO 启动/当前时间、经历时长、链数量、每链用户数、L1/L2/TOTAL TPS）。压测启动时间取各发送 job `{hash}-l1.json` 的最早 `start_timestamp`。
+
 `bench-cross-tx` 会将命令 stdout/stderr（含 `docker compose` 输出）自动 tee 到 `{logDir}/client/bench-cross-tx-{ts}.log`：
 
 - 从 `-f` / `--deploy-config`（默认 `./config.deploy.yaml`）读取 `logDir`
@@ -163,7 +165,7 @@ go run . tps --config ./7s_jobs.gen.json
 - `stats-logs`
   - 统计本地 `logs/client`、`logs/collected` 等日志行数与大小，输出 `output/log_stats.csv`
 - `tps`
-  - 校验 jobs JSON 后执行 `docker compose up --build tps`
+  - 校验 jobs JSON 后执行 `docker compose up --build tps`；汇总快照见 `output/jobs/TOTALTPS.json`
 - `gen-private-key`
   - 按 `ydyl-gen-accounts` 的 deterministic 规则生成私钥；`l2type=0/1/3` 使用 `chainID`，`l2type=2` 使用 `groupID`；`l2type=3` 输出 CIP-37 base32 地址
 - `sample-wallets`
