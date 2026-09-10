@@ -22,12 +22,15 @@ const (
 	SampleCount        = 10
 	DefaultMaxIndex    = uint64(1_000_000)
 	DefaultServersPath = "./output/servers.json"
+	CoreSampleName     = "core"
 )
 
 type Params struct {
 	ServersPath string
 	L2Type      int
 	MaxIndex    uint64
+	RPCURL      string
+	ChainID     uint64
 }
 
 type Wallet struct {
@@ -72,7 +75,7 @@ func (JSONRPCBalanceClient) BalanceAt(ctx context.Context, rpcURL, address strin
 	defer client.Close()
 
 	var result hexutil.Big
-	if l2type == 2 {
+	if l2type == 2 || l2type == 3 {
 		err = client.CallContext(ctx, &result, "cfx_getBalance", address, "latest_state")
 	} else {
 		err = client.CallContext(ctx, &result, "eth_getBalance", address, "latest")
@@ -84,20 +87,23 @@ func (JSONRPCBalanceClient) BalanceAt(ctx context.Context, rpcURL, address strin
 }
 
 func Run(ctx context.Context, p Params, fetcher SummaryFetcher, balances BalanceClient) (*Result, error) {
-	if p.L2Type != 0 && p.L2Type != 1 && p.L2Type != 2 {
+	if p.L2Type != 0 && p.L2Type != 1 && p.L2Type != 2 && p.L2Type != 3 {
 		return nil, fmt.Errorf("invalid l2type: %d", p.L2Type)
 	}
 	if p.MaxIndex < SampleCount {
 		return nil, fmt.Errorf("max-index 必须 >= %d，当前=%d", SampleCount, p.MaxIndex)
+	}
+	if balances == nil {
+		return nil, fmt.Errorf("balance client 不能为空")
+	}
+	if p.L2Type == 3 {
+		return runCore(ctx, p, balances)
 	}
 	if strings.TrimSpace(p.ServersPath) == "" {
 		return nil, fmt.Errorf("serversPath 不能为空")
 	}
 	if fetcher == nil {
 		return nil, fmt.Errorf("summary fetcher 不能为空")
-	}
-	if balances == nil {
-		return nil, fmt.Errorf("balance client 不能为空")
 	}
 
 	servers, err := crosstxconfig.LoadServers(p.ServersPath)
@@ -124,9 +130,12 @@ func Run(ctx context.Context, p Params, fetcher SummaryFetcher, balances Balance
 	if summary == nil {
 		return nil, fmt.Errorf("summary 为空: name=%s ip=%s", picked.Name, picked.IP)
 	}
-	rpcURL := strings.TrimSpace(crosstxconfig.ReplaceLocalhostWithIP(summary.L2_RPC_URL, picked.IP))
+	rpcURL := strings.TrimSpace(p.RPCURL)
 	if rpcURL == "" {
-		return nil, fmt.Errorf("L2_RPC_URL 为空: name=%s", picked.Name)
+		rpcURL = strings.TrimSpace(crosstxconfig.ReplaceLocalhostWithIP(summary.L2_RPC_URL, picked.IP))
+		if rpcURL == "" {
+			return nil, fmt.Errorf("L2_RPC_URL 为空: name=%s", picked.Name)
+		}
 	}
 
 	var chainID, groupID uint64
@@ -159,6 +168,34 @@ func Run(ctx context.Context, p Params, fetcher SummaryFetcher, balances Balance
 		L2Type:  p.L2Type,
 		ChainID: chainID,
 		GroupID: groupID,
+		RPC:     rpcURL,
+		Wallets: wallets,
+	}, nil
+}
+
+func runCore(ctx context.Context, p Params, balances BalanceClient) (*Result, error) {
+	rpcURL := strings.TrimSpace(p.RPCURL)
+	if rpcURL == "" {
+		return nil, fmt.Errorf("l2type=3 必须提供 --rpc-url")
+	}
+	if p.ChainID < 1 {
+		return nil, fmt.Errorf("l2type=3 时 chainID 必须 >= 1")
+	}
+	wallets, err := sampleWallets(0, p.ChainID, 3, p.MaxIndex, SampleCount)
+	if err != nil {
+		return nil, err
+	}
+	for i := range wallets {
+		bal, err := balances.BalanceAt(ctx, rpcURL, wallets[i].Address, 3)
+		if err != nil {
+			return nil, fmt.Errorf("查询余额失败: address=%s: %w", wallets[i].Address, err)
+		}
+		wallets[i].BalanceWei = bal
+	}
+	return &Result{
+		Name:    CoreSampleName,
+		L2Type:  3,
+		ChainID: p.ChainID,
 		RPC:     rpcURL,
 		Wallets: wallets,
 	}, nil
@@ -253,7 +290,12 @@ func sampleWallets(groupID, chainID uint64, l2type int, maxIndex uint64, count i
 		if err != nil {
 			continue
 		}
-		addr, err := cryptoutil.AddressFromPrivateKey(pk, l2type)
+		var addr string
+		if l2type == 3 {
+			addr, err = cryptoutil.CoreBase32AddressFromPrivateKey(pk, chainID)
+		} else {
+			addr, err = cryptoutil.AddressFromPrivateKey(pk, l2type)
+		}
 		if err != nil {
 			return nil, err
 		}

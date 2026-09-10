@@ -180,6 +180,91 @@ func TestRun_FailsWhenNoMatchingChain(t *testing.T) {
 	}
 }
 
+func TestRun_UsesRPCURLOverrideWithoutRewriting(t *testing.T) {
+	path := writeServers(t, `[
+  {"ip":"10.0.0.1","serviceType":"op","name":"tps-ydyl-op-1"}
+]`)
+	fetcher := stubSummaryFetcher{byIP: map[string]*ydylconsolesdk.SummaryResultResponse{
+		"10.0.0.1": {
+			L2_RPC_URL:  "http://127.0.0.1/l2rpc",
+			L2_CHAIN_ID: "10000",
+		},
+	}}
+	balances := &recordingBalanceClient{wei: big.NewInt(1)}
+	override := "http://127.0.0.1/custom"
+
+	got, err := Run(context.Background(), Params{
+		ServersPath: path,
+		L2Type:      1,
+		MaxIndex:    100,
+		RPCURL:      override,
+	}, fetcher, balances)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.RPC != override {
+		t.Fatalf("rpc=%q want override %q", got.RPC, override)
+	}
+	if len(balances.calls) != SampleCount {
+		t.Fatalf("balance calls=%d want %d", len(balances.calls), SampleCount)
+	}
+	for i, c := range balances.calls {
+		if c.rpcURL != override {
+			t.Fatalf("call %d rpcURL=%q want %q", i, c.rpcURL, override)
+		}
+	}
+}
+
+func TestRun_OverrideAllowsEmptySummaryRPC(t *testing.T) {
+	path := writeServers(t, `[
+  {"ip":"10.0.0.1","serviceType":"op","name":"tps-ydyl-op-1"}
+]`)
+	fetcher := stubSummaryFetcher{byIP: map[string]*ydylconsolesdk.SummaryResultResponse{
+		"10.0.0.1": {
+			L2_CHAIN_ID: "10000",
+		},
+	}}
+	override := "http://10.0.0.9/l2rpc"
+
+	got, err := Run(context.Background(), Params{
+		ServersPath: path,
+		L2Type:      1,
+		MaxIndex:    100,
+		RPCURL:      override,
+	}, fetcher, &recordingBalanceClient{wei: big.NewInt(1)})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.RPC != override {
+		t.Fatalf("rpc=%q want %q", got.RPC, override)
+	}
+}
+
+func TestRun_BlankRPCURLFallsBackToRewrittenSummary(t *testing.T) {
+	path := writeServers(t, `[
+  {"ip":"10.0.0.1","serviceType":"op","name":"tps-ydyl-op-1"}
+]`)
+	fetcher := stubSummaryFetcher{byIP: map[string]*ydylconsolesdk.SummaryResultResponse{
+		"10.0.0.1": {
+			L2_RPC_URL:  "http://127.0.0.1/l2rpc",
+			L2_CHAIN_ID: "10000",
+		},
+	}}
+
+	got, err := Run(context.Background(), Params{
+		ServersPath: path,
+		L2Type:      1,
+		MaxIndex:    100,
+		RPCURL:      "   ",
+	}, fetcher, &recordingBalanceClient{wei: big.NewInt(1)})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.RPC != "http://10.0.0.1/l2rpc" {
+		t.Fatalf("rpc=%q want rewritten host", got.RPC)
+	}
+}
+
 func TestRun_FailsWhenMaxIndexTooSmall(t *testing.T) {
 	path := writeServers(t, `[
   {"ip":"10.0.0.1","serviceType":"op","name":"tps-ydyl-op-1"}
@@ -263,6 +348,116 @@ func TestJSONRPCBalanceClient_UsesEthGetBalanceForEVM(t *testing.T) {
 	}
 	if got.Cmp(big.NewInt(10)) != 0 {
 		t.Fatalf("balance=%s want 10", got)
+	}
+}
+
+func TestRun_CoreSpaceUsesRPCAndChainIDWithoutServers(t *testing.T) {
+	balances := &recordingBalanceClient{wei: big.NewInt(7)}
+	rpcURL := "http://52.12.7.189/cspace"
+
+	got, err := Run(context.Background(), Params{
+		L2Type:   3,
+		MaxIndex: 100,
+		RPCURL:   rpcURL,
+		ChainID:  7654,
+	}, nil, balances)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Name != "core" {
+		t.Fatalf("name=%q want core", got.Name)
+	}
+	if got.L2Type != 3 {
+		t.Fatalf("l2type=%d want 3", got.L2Type)
+	}
+	if got.ChainID != 7654 {
+		t.Fatalf("chainID=%d want 7654", got.ChainID)
+	}
+	if got.RPC != rpcURL {
+		t.Fatalf("rpc=%q want %q", got.RPC, rpcURL)
+	}
+	if len(got.Wallets) != SampleCount {
+		t.Fatalf("wallets=%d want %d", len(got.Wallets), SampleCount)
+	}
+	if len(balances.calls) != SampleCount {
+		t.Fatalf("balance calls=%d want %d", len(balances.calls), SampleCount)
+	}
+	for i, w := range got.Wallets {
+		if !strings.HasPrefix(w.Address, "net7654:") {
+			t.Fatalf("wallet %d address=%q want net7654: prefix", i, w.Address)
+		}
+		if balances.calls[i].rpcURL != rpcURL {
+			t.Fatalf("call %d rpcURL=%q want %q", i, balances.calls[i].rpcURL, rpcURL)
+		}
+		if balances.calls[i].l2type != 3 {
+			t.Fatalf("call %d l2type=%d want 3", i, balances.calls[i].l2type)
+		}
+		if balances.calls[i].address != w.Address {
+			t.Fatalf("call %d address=%q want %q", i, balances.calls[i].address, w.Address)
+		}
+	}
+}
+
+func TestRun_CoreSpaceRequiresRPCURL(t *testing.T) {
+	_, err := Run(context.Background(), Params{
+		L2Type:   3,
+		MaxIndex: 100,
+		ChainID:  7654,
+	}, nil, &recordingBalanceClient{})
+	if err == nil {
+		t.Fatal("expected rpc-url error")
+	}
+	if !strings.Contains(err.Error(), "rpc-url") {
+		t.Fatalf("error should mention rpc-url, got %v", err)
+	}
+}
+
+func TestRun_CoreSpaceRequiresChainID(t *testing.T) {
+	_, err := Run(context.Background(), Params{
+		L2Type:   3,
+		MaxIndex: 100,
+		RPCURL:   "http://127.0.0.1/cspace",
+		ChainID:  0,
+	}, nil, &recordingBalanceClient{})
+	if err == nil {
+		t.Fatal("expected chainID error")
+	}
+	if !strings.Contains(err.Error(), "chainID") {
+		t.Fatalf("error should mention chainID, got %v", err)
+	}
+}
+
+func TestJSONRPCBalanceClient_UsesCfxGetBalanceForCore(t *testing.T) {
+	var method, epoch string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode: %v", err)
+			return
+		}
+		method = body.Method
+		if len(body.Params) > 1 {
+			_ = json.Unmarshal(body.Params[1], &epoch)
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x1"}`))
+	}))
+	defer srv.Close()
+
+	got, err := JSONRPCBalanceClient{}.BalanceAt(context.Background(), srv.URL, "net7654:aan7uwsne58wxrdz7tbdmh842vs55mvuzp4atx32zx", 3)
+	if err != nil {
+		t.Fatalf("BalanceAt: %v", err)
+	}
+	if method != "cfx_getBalance" {
+		t.Fatalf("method=%q want cfx_getBalance", method)
+	}
+	if epoch != "latest_state" {
+		t.Fatalf("epoch=%q want latest_state", epoch)
+	}
+	if got.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("balance=%s want 1", got)
 	}
 }
 

@@ -26,6 +26,20 @@ func TestSampleWalletsFlagDefaults(t *testing.T) {
 	if maxIndex != samplewallets.DefaultMaxIndex {
 		t.Fatalf("max-index default = %d, want %d", maxIndex, samplewallets.DefaultMaxIndex)
 	}
+	rpcURL, err := cmd.Flags().GetString("rpc-url")
+	if err != nil {
+		t.Fatalf("get rpc-url: %v", err)
+	}
+	if rpcURL != "" {
+		t.Fatalf("rpc-url default = %q, want empty", rpcURL)
+	}
+	chainID, err := cmd.Flags().GetUint64("chainID")
+	if err != nil {
+		t.Fatalf("get chainID: %v", err)
+	}
+	if chainID != 0 {
+		t.Fatalf("chainID default = %d, want 0", chainID)
+	}
 }
 
 func TestSampleWalletsL2TypeIsRequired(t *testing.T) {
