@@ -20,7 +20,7 @@ import (
 
 const (
 	SampleCount        = 10
-	DefaultMaxIndex    = uint64(1_000)
+	DefaultMaxIndex    = uint64(1_000_000)
 	DefaultServersPath = "./output/servers.json"
 	CoreSampleName     = "core"
 )
